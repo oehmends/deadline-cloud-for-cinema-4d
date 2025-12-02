@@ -11,7 +11,7 @@ from pathlib import Path
 from deadline.client.ui.dataclasses.timeouts import TimeoutEntry, TimeoutTableEntries
 
 from .takes import TakeSelection  # type: ignore
-from .enums import ErrorChecking, TextCaching
+from .error_checking import ErrorChecking
 from datetime import timedelta
 
 RENDER_SUBMITTER_SETTINGS_FILE_EXT = ".deadline_render_settings.json"
@@ -83,6 +83,13 @@ class RenderSubmitterUISettings:
         default_factory=default_timeout_entries, metadata={"sticky": True}
     )
     export_job_bundle_to_temp: bool = field(default=False, metadata={"sticky": True})
+
+    create_movie_files: bool = field(default=False)
+    frame_rate: int = field(default=24)
+    movie_high_quality_crf: int = field(default=17, metadata={"sticky": True})
+    movie_proxy_crf: int = field(default=28, metadata={"sticky": True})
+    movie_proxy_scale: float = field(default=0.5, metadata={"sticky": True})
+    movie_codec: str = field(default="libx264", metadata={"sticky": True})
 
     # developer options
     include_adaptor_wheels: bool = field(default=False, metadata={"sticky": True})

@@ -1,11 +1,12 @@
 # Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+import json
 import os
 import re
 import tempfile
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional, Set
 
 import shutil
 
@@ -25,18 +26,15 @@ from deadline.client.ui.dialogs.submit_job_to_deadline_dialog import (  # pylint
 
 from ._version import version_tuple as adaptor_version_tuple
 from .assets import AssetIntrospector
-from .data_classes import (
-    RenderSubmitterUISettings,
-)
-from .detailed_logging_utils import get_detailed_logging_environment
+from .data_classes import RenderSubmitterUISettings
 from .font_utils import scene_has_fonts, get_font_manager_environment, FONTS_DIR
-from .warning_collector import warning_collector
 from .platform_utils import is_windows
 from .scene import Animation, Scene
 from .style import C4D_STYLE
 from .takes import TakeSelection
 from .template_timeout_patcher import add_timeouts_to_job_template
-from .ui.components import SceneSettingsWidget, SubmissionWarningDialog
+from .ui.components.scene_settings_tab import SceneSettingsWidget
+from .frame_utils import FrameSpec, has_multiple_frames, parse_frame_spec
 
 LOADED = False
 
@@ -49,8 +47,30 @@ class TakeData:
     ui_group_label: str
     frames_parameter_name: Optional[str]
     frame_range: str
+    frame_spec: FrameSpec
     output_directories: set[str]
+    primary_output_path: str
     marked: bool
+
+
+@dataclass
+class MovieStepConfig:
+    step_name: str
+    dependency_step_name: str
+    take_display_name: str
+    frame_numbers: List[int]
+    frame_rate: int
+    fallback_prefix: str
+    fallback_suffix: str
+    expected_extension: str
+    movie_basename: str
+    additional_directories: List[str]
+    output_path_param: str
+    multi_pass_path_param: str
+    high_quality_crf: int
+    proxy_crf: int
+    proxy_scale: float
+    codec: str
 
 
 def show_submitter():
@@ -102,10 +122,6 @@ def _get_parameter_values(
     parameter_values.append(
         {"name": "ActivateErrorChecking", "value": settings.activate_error_checking}
     )
-    parameter_values.append(
-        {"name": "DetailedLogging", "value": "1" if settings.activate_detailed_logging else "0"}
-    )
-    parameter_values.append({"name": "UseCachedText", "value": settings.use_cached_text})
 
     if per_take_frames_parameters:
         for take_data in submit_takes:
@@ -132,7 +148,6 @@ def _get_parameter_values(
         raise DeadlineOperationError(
             "The following queue parameters conflict with the Cinema4D job parameters:\n"
             + f"{', '.join(parameter_overlap)}"
-            "Rename the parameters on the queue to continue job submissions."
         )
 
     # If we're overriding the adaptor with wheels, remove deadline_cloud_for_cinema4d from the CondaPackages
@@ -158,10 +173,456 @@ def _get_parameter_values(
     return parameter_values
 
 
+def _sanitize_movie_basename(prefix: str, fallback: str) -> str:
+    candidate = prefix.rstrip(" _-.")
+    if not candidate:
+        candidate = fallback
+    candidate = re.sub(r"[^A-Za-z0-9_-]+", "_", candidate)
+    return candidate or "movie"
+
+
+def _prepare_movie_step_config(
+    take_data: TakeData,
+    settings: RenderSubmitterUISettings,
+    frame_spec: FrameSpec,
+) -> Optional[MovieStepConfig]:
+    frame_numbers = list(frame_spec.frames)
+    if len(frame_numbers) <= 1:
+        return None
+
+    directories: List[str] = []
+    seen_dirs: Set[str] = set()
+
+    def add_directory(path: Optional[str]):
+        if not path:
+            return
+        normalized = os.path.normpath(path)
+        if normalized not in seen_dirs:
+            seen_dirs.add(normalized)
+            directories.append(normalized)
+
+    if take_data.primary_output_path:
+        add_directory(str(Path(take_data.primary_output_path).parent))
+    for directory in sorted(take_data.output_directories):
+        add_directory(directory)
+
+    fallback_prefix = ""
+    fallback_suffix = ""
+    expected_extension = ""
+
+    if take_data.primary_output_path:
+        sample_path = Path(take_data.primary_output_path)
+        fallback_suffix = sample_path.suffix.lower()
+        expected_extension = fallback_suffix
+        match = re.match(r"^(.*?)(\d+)$", sample_path.stem)
+        fallback_prefix = match.group(1) if match else sample_path.stem
+
+    if settings.override_output_path and settings.output_path:
+        override_path = Path(settings.output_path)
+        override_suffix = override_path.suffix.lower()
+        if override_suffix:
+            expected_extension = override_suffix
+        match = re.match(r"^(.*?)(\d+)$", override_path.stem)
+        if match and match.group(1):
+            fallback_prefix = match.group(1)
+
+    sanitized_base = _sanitize_movie_basename(
+        fallback_prefix,
+        take_data.display_name.replace(" ", "_"),
+    )
+
+    additional_directories: List[str] = []
+    output_parent = None
+    multi_parent = None
+    if settings.output_path:
+        output_parent = os.path.normpath(os.path.dirname(settings.output_path))
+    if settings.multi_pass_path:
+        multi_parent = os.path.normpath(os.path.dirname(settings.multi_pass_path))
+
+    for directory in directories:
+        if directory == output_parent or directory == multi_parent:
+            continue
+        additional_directories.append(directory)
+
+    frame_rate = settings.frame_rate or c4d.documents.GetActiveDocument().GetFps()
+
+    return MovieStepConfig(
+        step_name=f"{take_data.display_name} Movie",
+        dependency_step_name=take_data.display_name,
+        take_display_name=take_data.display_name,
+        frame_numbers=frame_numbers,
+        frame_rate=frame_rate,
+        fallback_prefix=fallback_prefix,
+        fallback_suffix=fallback_suffix,
+        expected_extension=expected_extension,
+        movie_basename=sanitized_base,
+        additional_directories=additional_directories,
+        output_path_param="{{Param.OutputPath}}",
+        multi_pass_path_param="{{Param.MultiPassPath}}",
+        high_quality_crf=settings.movie_high_quality_crf,
+        proxy_crf=settings.movie_proxy_crf,
+        proxy_scale=settings.movie_proxy_scale,
+        codec=settings.movie_codec,
+    )
+
+
+def _movie_script_from_config(config: MovieStepConfig) -> str:
+    frame_numbers_literal = json.dumps(config.frame_numbers)
+
+    lines = [
+        "#!/usr/bin/env python3",
+        "import json",
+        "import os",
+        "import subprocess",
+        "from pathlib import Path",
+        "import tempfile",
+        "import shutil",
+        "import tarfile",
+        "import urllib.request",
+        "import re",
+        "import sys",
+        "",
+        f"FRAME_NUMBERS = {frame_numbers_literal}",
+        f"FRAME_RATE = {config.frame_rate}",
+        f"FALLBACK_PREFIX = {json.dumps(config.fallback_prefix)}",
+        f"FALLBACK_SUFFIX = {json.dumps(config.fallback_suffix)}",
+        f"EXPECTED_EXTENSION = {json.dumps(config.expected_extension)}",
+        f"MOVIE_BASENAME = {json.dumps(config.movie_basename)}",
+        f"TAKE_DISPLAY_NAME = {json.dumps(config.take_display_name)}",
+        f"MOVIE_CODEC = {json.dumps(config.codec)}",
+        f"HIGH_QUALITY_CRF = {config.high_quality_crf}",
+        f"PROXY_CRF = {config.proxy_crf}",
+        f"PROXY_SCALE = {config.proxy_scale}",
+        "HIGH_QUALITY_PRESET = 'slow'",
+        "PROXY_PRESET = 'veryfast'",
+        "",
+        "ADDITIONAL_DIRECTORIES = json.loads(os.environ.get('ADDITIONAL_FRAME_DIRECTORIES', '[]'))",
+        "OUTPUT_PATH = os.environ.get('OUTPUT_PATH', '').strip()",
+        "MULTI_PASS_PATH = os.environ.get('MULTI_PASS_PATH', '').strip()",
+        "",
+        "def _log(message):",
+        "    print(f\"[CreateMovie] {message}\")",
+        "",
+        "def _gather_candidate_directories():",
+        "    directories = []",
+        "    for candidate in [OUTPUT_PATH, MULTI_PASS_PATH]:",
+        "        if not candidate:",
+        "            continue",
+        "        directory = Path(candidate).parent",
+        "        if directory not in directories:",
+        "            directories.append(directory)",
+        "    for item in ADDITIONAL_DIRECTORIES:",
+        "        try:",
+        "            directory = Path(item)",
+        "        except TypeError:",
+        "            continue",
+        "        if directory not in directories:",
+        "            directories.append(directory)",
+        "    return directories",
+        "",
+        "def _collect_sequences(frame_directories):",
+        "    sequences = {}",
+        "    for directory in frame_directories:",
+        "        if not directory.exists():",
+        "            _log(f\"Skipping missing directory {directory}\")",
+        "            continue",
+        "        for entry in sorted(directory.iterdir()):",
+        "            if not entry.is_file():",
+        "                continue",
+        "            suffix = entry.suffix.lower()",
+        "            expected_suffix = EXPECTED_EXTENSION.lower()",
+        "            if expected_suffix and suffix != expected_suffix:",
+        "                continue",
+        "            match = re.match(r\"^(.*?)(\\d+)$\", entry.stem)",
+        "            if not match:",
+        "                continue",
+        "            prefix, digits = match.groups()",
+        "            frame_number = int(digits)",
+        "            key = (str(directory.resolve()), prefix, suffix, len(digits))",
+        "            frames = sequences.setdefault(key, {})",
+        "            frames[frame_number] = entry.resolve()",
+        "    return sequences",
+        "",
+        "def _sequence_priority(key, output_directory):",
+        "    dir_path, prefix, suffix, digits = key",
+        "    score = 0",
+        "    fallback_prefix = FALLBACK_PREFIX or \"\"",
+        "    fallback_suffix = FALLBACK_SUFFIX.lower() if FALLBACK_SUFFIX else \"\"",
+        "    expected_suffix = EXPECTED_EXTENSION.lower() if EXPECTED_EXTENSION else \"\"",
+        "",
+        "    if fallback_prefix and prefix == fallback_prefix:",
+        "        score += 100",
+        "    elif fallback_prefix and prefix.startswith(fallback_prefix):",
+        "        score += 60",
+        "",
+        "    if fallback_suffix and suffix == fallback_suffix:",
+        "        score += 40",
+        "",
+        "    if expected_suffix and suffix == expected_suffix:",
+        "        score += 20",
+        "",
+        "    if output_directory and dir_path == str(output_directory.resolve()):",
+        "        score += 10",
+        "",
+        "    return score, digits",
+        "",
+        "def _select_sequence(sequences, output_directory):",
+        "    ranked = sorted(",
+        "        sequences.items(),",
+        "        key=lambda item: _sequence_priority(item[0], output_directory),",
+        "        reverse=True,",
+        "    )",
+        "    for key, frames_map in ranked:",
+        "        missing = [frame for frame in FRAME_NUMBERS if frame not in frames_map]",
+        "        if not missing:",
+        "            return key, frames_map",
+        "    return None, {}",
+        "",
+        "def _write_manifest(frame_paths):",
+        "    temp = tempfile.NamedTemporaryFile(\"w\", suffix=\".txt\", delete=False)",
+        "    try:",
+        "        frame_duration = 1.0 / FRAME_RATE if FRAME_RATE else 1.0",
+        "        last_safe_path = None",
+        "        for path in frame_paths:",
+        "            safe_path = path.as_posix().replace(\"'\", \"'\\'\")",
+        "            temp.write(f\"file '{safe_path}'\\n\")",
+        "            temp.write(f\"duration {frame_duration:.10f}\\n\")",
+        "            last_safe_path = safe_path",
+        "        if last_safe_path:",
+        "            temp.write(f\"file '{last_safe_path}'\\n\")",
+        "    finally:",
+        "        temp.close()",
+        "    return Path(temp.name)",
+        "",
+        "def _run_ffmpeg(manifest_path, output_path, extra_args):",
+        "    cmd = [",
+        "        \"ffmpeg\",",
+        "        \"-y\",",
+        "        \"-f\",",
+        "        \"concat\",",
+        "        \"-safe\",",
+        "        \"0\",",
+        "        \"-i\",",
+        "        str(manifest_path),",
+        "        \"-r\",",
+        "        str(FRAME_RATE),",
+        "    ]",
+        "    cmd.extend(extra_args)",
+        "    cmd.append(str(output_path))",
+        "    _log(f\"Running ffmpeg: {' '.join(cmd)}\")",
+        "    subprocess.run(cmd, check=True)",
+        "",
+        "def _ensure_ffmpeg():",
+        "    if shutil.which('ffmpeg'):",
+        "        return",
+        "",
+        "    installers = []",
+        "    if shutil.which('dnf'):",
+        "        installers.append(['dnf', 'install', '-y', 'ffmpeg'])",
+        "        installers.append(['sudo', 'dnf', 'install', '-y', 'ffmpeg'])",
+        "    if shutil.which('yum'):",
+        "        installers.append(['yum', 'install', '-y', 'ffmpeg'])",
+        "        installers.append(['sudo', 'yum', 'install', '-y', 'ffmpeg'])",
+        "    if shutil.which('amazon-linux-extras'):",
+        "        installers.append(['amazon-linux-extras', 'install', 'ffmpeg', '-y'])",
+        "        installers.append(['sudo', 'amazon-linux-extras', 'install', 'ffmpeg', '-y'])",
+        "",
+        "    for command in installers:",
+        "        try:",
+        "            _log(f\"Attempting to install ffmpeg via: {' '.join(command)}\")",
+        "            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)",
+        "            if shutil.which('ffmpeg'):",
+        "                _log('ffmpeg installation succeeded')",
+        "                return",
+        "        except (FileNotFoundError, subprocess.CalledProcessError):",
+        "            _log(f\"Failed to install ffmpeg with: {' '.join(command)}\")",
+        "",
+        "    archive_url = 'https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz'",
+        "    download_dir = Path(tempfile.gettempdir()) / 'ffmpeg-static'",
+        "    try:",
+        "        download_dir.mkdir(parents=True, exist_ok=True)",
+        "        archive_path = download_dir / 'ffmpeg.tar.xz'",
+        "        _log(f\"Downloading ffmpeg from {archive_url}\")",
+        "        with urllib.request.urlopen(archive_url) as response, open(archive_path, 'wb') as archive_file:",
+        "            shutil.copyfileobj(response, archive_file)",
+        "        with tarfile.open(archive_path, 'r:xz') as tar:",
+        "            tar.extractall(download_dir)",
+        "        bin_dir = None",
+        "        for item in download_dir.iterdir():",
+        "            if item.is_dir() and (item / 'ffmpeg').exists():",
+        "                bin_dir = item",
+        "                break",
+        "        if bin_dir is None:",
+        "            raise RuntimeError('ffmpeg archive did not contain expected binaries')",
+        "        os.environ['PATH'] = f\"{bin_dir}:{os.environ['PATH']}\"",
+        "        if shutil.which('ffmpeg'):",
+        "            _log(f\"ffmpeg downloaded to {bin_dir}\")",
+        "            return",
+        "    except Exception as exc:",
+        "        _log(f\"Failed to download static ffmpeg: {exc}\")",
+        "",
+        "    raise RuntimeError('Unable to install ffmpeg automatically.')",
+        "",
+        "def _determine_output_directory(frame_directories):",
+        "    if OUTPUT_PATH:",
+        "        return Path(OUTPUT_PATH).parent",
+        "    if frame_directories:",
+        "        return frame_directories[0]",
+        "    return None",
+        "",
+        "def main():",
+        "    if len(FRAME_NUMBERS) <= 1:",
+        "        _log(f\"Skipping movie creation for {TAKE_DISPLAY_NAME} because there is only one frame.\")",
+        "        return",
+        "",
+        "    _ensure_ffmpeg()",
+        "",
+        "    frame_directories = _gather_candidate_directories()",
+        "    if not frame_directories:",
+        "        raise RuntimeError(",
+        "            f\"No frame directories resolved for {TAKE_DISPLAY_NAME}.\")",
+        "",
+        "    output_directory = _determine_output_directory(frame_directories)",
+        "    if output_directory is None:",
+        "        raise RuntimeError(",
+        "            f\"Unable to determine an output directory for {TAKE_DISPLAY_NAME}.\")",
+        "",
+        "    sequences = _collect_sequences(frame_directories)",
+        "    if not sequences:",
+        "        directories_list = ', '.join(str(directory) for directory in frame_directories)",
+        "        raise RuntimeError(",
+        "            f\"No frame sequences found for {TAKE_DISPLAY_NAME} in directories: {directories_list}\")",
+        "",
+        "    _, frames_map = _select_sequence(sequences, output_directory)",
+        "    if not frames_map:",
+        "        raise RuntimeError(",
+        "            f\"Unable to locate all frames for {TAKE_DISPLAY_NAME}. Expected frames: {FRAME_NUMBERS}\")",
+        "",
+        "    ordered_paths = []",
+        "    missing_frames = []",
+        "    for frame in FRAME_NUMBERS:",
+        "        path = frames_map.get(frame)",
+        "        if path is None:",
+        "            missing_frames.append(frame)",
+        "        else:",
+        "            ordered_paths.append(path)",
+        "",
+        "    if missing_frames:",
+        "        sorted_paths = [frames_map[key] for key in sorted(frames_map)]",
+        "        if len(sorted_paths) >= len(FRAME_NUMBERS):",
+        "            _log(f\"Warning: Expected frames {FRAME_NUMBERS} not found; using available frames in sorted order. Missing: {missing_frames}\")",
+        "            ordered_paths = sorted_paths[: len(FRAME_NUMBERS)]",
+        "            missing_frames = []",
+        "        else:",
+        "            raise RuntimeError(f\"Missing frames {missing_frames} for {TAKE_DISPLAY_NAME}.\")",
+        "",
+        "    if len(ordered_paths) <= 1:",
+        "        raise RuntimeError(",
+        "            f\"Need at least two frames to create a movie for {TAKE_DISPLAY_NAME}.\")",
+        "",
+        f"    high_quality_output = output_directory / {json.dumps(config.movie_basename + '_hq.mp4')}",
+        f"    proxy_output = output_directory / {json.dumps(config.movie_basename + '_proxy.mp4')}",
+        "",
+        "    output_directory.mkdir(parents=True, exist_ok=True)",
+        "    high_quality_output.parent.mkdir(parents=True, exist_ok=True)",
+        "    proxy_output.parent.mkdir(parents=True, exist_ok=True)",
+        "",
+        "    manifest_path = _write_manifest(ordered_paths)",
+        "    try:",
+        "        high_quality_args = [",
+        "            '-c:v',",
+        "            MOVIE_CODEC,",
+        "            '-preset',",
+        "            HIGH_QUALITY_PRESET,",
+        "            '-crf',",
+        "            str(HIGH_QUALITY_CRF),",
+        "            '-pix_fmt',",
+        "            'yuv420p',",
+        "            '-movflags',",
+        "            'faststart',",
+        "        ]",
+        "        if MOVIE_CODEC == 'libx265':",
+        "            high_quality_args.extend(['-tag:v', 'hvc1'])",
+        "        _run_ffmpeg(manifest_path, high_quality_output, high_quality_args)",
+        "",
+        "        proxy_args = [",
+        "            '-c:v',",
+        "            MOVIE_CODEC,",
+        "            '-preset',",
+        "            PROXY_PRESET,",
+        "            '-crf',",
+        "            str(PROXY_CRF),",
+        "            '-pix_fmt',",
+        "            'yuv420p',",
+        "            '-movflags',",
+        "            'faststart',",
+        "        ]",
+        "        if MOVIE_CODEC == 'libx265':",
+        "            proxy_args.extend(['-tag:v', 'hvc1'])",
+        "        if PROXY_SCALE and abs(PROXY_SCALE - 1.0) > 1e-3:",
+        "            scale_expr = f\"scale=trunc(iw*{PROXY_SCALE}/2)*2:trunc(ih*{PROXY_SCALE}/2)*2\"",
+        "            proxy_args.extend(['-vf', scale_expr])",
+        "        _run_ffmpeg(manifest_path, proxy_output, proxy_args)",
+        "    finally:",
+        "        try:",
+        "            manifest_path.unlink()",
+        "        except OSError:",
+        "            pass",
+        "",
+        "if __name__ == \"__main__\":",
+        "    try:",
+        "        main()",
+        "    except Exception as exc:  # pylint: disable=broad-except",
+        "        _log(f\"Movie creation failed: {exc}\")",
+        "        sys.exit(1)",
+        "",
+    ]
+
+    return "\n".join(lines)
+
+def _build_movie_step(config: MovieStepConfig) -> dict[str, Any]:
+    script_data = _movie_script_from_config(config)
+    env_variables: dict[str, str] = {
+        "OUTPUT_PATH": config.output_path_param,
+        "MULTI_PASS_PATH": config.multi_pass_path_param,
+        "ADDITIONAL_FRAME_DIRECTORIES": json.dumps(config.additional_directories)
+        if config.additional_directories
+        else "[]",
+    }
+    return {
+        "name": config.step_name,
+        "dependencies": [{"dependsOn": config.dependency_step_name}],
+        "stepEnvironments": [
+            {
+                "name": "MovieInputs",
+                "variables": env_variables,
+            }
+        ],
+        "script": {
+            "embeddedFiles": [
+                {
+                    "name": "CreateMovie",
+                    "filename": "create_movie.py",
+                    "type": "TEXT",
+                    "runnable": True,
+                    "data": script_data,
+                }
+            ],
+            "actions": {
+                "onRun": {
+                    "command": "python",
+                    "args": ["{{Task.File.CreateMovie}}"],
+                }
+            },
+        },
+    }
+
+
 def _get_job_template(
     settings: RenderSubmitterUISettings,
     renderers: set[str],
     takes: list[TakeData],
+    per_take_frames_parameters: bool,
 ) -> dict[str, Any]:
     if os.getenv("DEADLINE_COMMAND_TEMPLATE"):
         template = "default_cinema4d_job_template.yaml"
@@ -181,6 +642,12 @@ def _get_job_template(
         # remove description field since it can't be empty
         # ignore if description is missing from template
         job_template.pop("description", None)
+
+    override_frame_spec = (
+        parse_frame_spec(settings.frame_list)
+        if settings.override_frame_range
+        else None
+    )
 
     # If there are multiple frame ranges, split up the Frames parameter by take
     if takes[0].frames_parameter_name:
@@ -222,9 +689,18 @@ def _get_job_template(
             # Update the init data of the step
             init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]
             init_data["data"] = (
-                "scene_file: '{{Param.Cinema4DFile}}'\ntake: '%s'\noutput_path: '{{Param.OutputPath}}'\nmulti_pass_path: '{{Param.MultiPassPath}}'\nactivate_error_checking: '{{Param.ActivateErrorChecking}}'\nuse_cached_text: '{{Param.UseCachedText}}'"
+                "scene_file: '{{Param.Cinema4DFile}}'\ntake: '%s'\noutput_path: '{{Param.OutputPath}}'\nmulti_pass_path: '{{Param.MultiPassPath}}'\nactivate_error_checking: '{{Param.ActivateErrorChecking}}'"
                 % take_data.name
             )
+
+        if settings.create_movie_files:
+            frame_spec = take_data.frame_spec
+            if override_frame_spec and override_frame_spec.frames:
+                frame_spec = override_frame_spec
+
+            movie_config = _prepare_movie_step_config(take_data, settings, frame_spec)
+            if movie_config:
+                job_template["steps"].append(_build_movie_step(movie_config))
 
     # If Arnold is one of the renderers, add Arnold-specific parameters
     if "arnold" in renderers:
@@ -362,6 +838,8 @@ def initialize_render_settings() -> RenderSubmitterUISettings:
     default_path, multi_path = Scene.get_output_paths()
     render_settings.output_path = default_path
     render_settings.multi_pass_path = multi_path
+    render_settings.frame_rate = c4d.documents.GetActiveDocument().GetFps()
+    render_settings.create_movie_files = has_multiple_frames(render_settings.frame_list)
     render_settings.load_sticky_settings(Scene.name())
     return render_settings
 
@@ -396,17 +874,22 @@ def get_takes_from_doc(doc: Any) -> dict[str, list[TakeData]]:
         take_render_data = Scene.get_render_data(doc=doc, take=take)
         renderer_name = Scene.renderer(take_render_data)
         output_directories = Scene.get_output_directories(take=take)
+        default_output_path, _ = Scene.get_output_paths(take=take)
         label_prefix = "Take "
         label_suffix = f" Settings ({renderer_name} renderer)"
         characters_from_take_in_label = 64 - len(label_prefix) - len(label_suffix)
+        frame_range = Animation.frame_list(take_render_data)
+        frame_spec = parse_frame_spec(frame_range)
         take_data = TakeData(
             name=take_name,
             display_name=display_name,
             renderer_name=renderer_name,
             ui_group_label=f"{label_prefix}{display_name[:characters_from_take_in_label]}{label_suffix}",
             frames_parameter_name=None,
-            frame_range=Animation.frame_list(take_render_data),
+            frame_range=frame_range,
+            frame_spec=frame_spec,
             output_directories=output_directories,
+            primary_output_path=default_output_path,
             marked=take.IsChecked(),
         )
         take_data_list.append(take_data)
@@ -464,6 +947,8 @@ def create_job_bundle(
     original_cinema4d_file = Scene.name()
     scene_output_path, scene_multi_pass_path = Scene.get_output_paths()
 
+    settings.frame_rate = c4d.documents.GetActiveDocument().GetFps()
+
     if settings.export_job_bundle_to_temp and temp_dir:
         export_to_temp_folder(temp_dir, asset_references)
 
@@ -509,7 +994,12 @@ def create_job_bundle(
         generate_take_parameter_names(submit_takes)
 
     renderers: set[str] = {take_data.renderer_name for take_data in submit_takes}
-    job_template = _get_job_template(settings, renderers, submit_takes)
+    job_template = _get_job_template(
+        settings,
+        renderers,
+        submit_takes,
+        per_take_frames_parameters,
+    )
     parameter_values = _get_parameter_values(
         settings, queue_parameters, per_take_frames_parameters, submit_takes
     )
@@ -576,8 +1066,7 @@ def generate_take_parameter_names(submit_takes: list[TakeData]) -> None:
         take_name = take_data.name
         if take_name in take_names:
             raise RuntimeError(
-                f"You have multiple takes named '{take_name}' with different render settings among the takes. "
-                "Please use unique take names."
+                f"You have multiple takes named '{take_name}'. Please use unique take names."
             )
         take_names.add(take_name)
 
@@ -633,19 +1122,17 @@ def setup_attachments(render_settings: RenderSubmitterUISettings) -> AssetRefere
     )
 
 
-def get_conda_packages(doc: Any) -> str:
+def get_conda_packages() -> str:
     """
     Get the required conda packages string based on C4D version.
     """
     c4d_major_version = str(c4d.GetC4DVersion())[:4]
-    adaptor_version = ".".join(str(v) for v in adaptor_version_tuple[:2])
-    packages = f"cinema4d={c4d_major_version}.* cinema4d-openjd={adaptor_version}.*"
-
-    render_data = doc.GetActiveRenderData()
-    if render_data[c4d.RDATA_RENDERENGINE] == 1029988:  # Arnold
-        packages += " cinema4d-c4dtoa"
-
-    return packages
+    adaptor_major, adaptor_minor = adaptor_version_tuple[:2]
+    if adaptor_major == 0 and adaptor_minor == 0:
+        adaptor_version = "0.8"
+    else:
+        adaptor_version = f"{adaptor_major}.{adaptor_minor}"
+    return f"cinema4d={c4d_major_version}.* cinema4d-openjd={adaptor_version}.*"
 
 
 def export_to_temp_folder(temp_dir: str, asset_references: AssetReferences) -> None:
@@ -730,7 +1217,7 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
     auto_detected_attachments = setup_auto_detected_attachments(takes["take_data_list"])
     attachments = setup_attachments(render_settings)
 
-    conda_packages = get_conda_packages(doc)
+    conda_packages = get_conda_packages()
 
     def on_create_job_bundle_callback(
         widget: SubmitJobToDeadlineDialog,
