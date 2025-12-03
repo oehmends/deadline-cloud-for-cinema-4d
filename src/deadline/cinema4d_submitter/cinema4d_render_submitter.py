@@ -25,8 +25,9 @@ from deadline.client.ui.dialogs.submit_job_to_deadline_dialog import (  # pylint
 
 from ._version import version_tuple as adaptor_version_tuple
 from .assets import AssetIntrospector
-from .data_classes import RenderSubmitterUISettings
-from .enums import TextCaching
+from .data_classes import (
+    RenderSubmitterUISettings,
+)
 from .detailed_logging_utils import get_detailed_logging_environment
 from .font_utils import scene_has_fonts, get_font_manager_environment, FONTS_DIR
 from .warning_collector import warning_collector
@@ -362,9 +363,6 @@ def initialize_render_settings() -> RenderSubmitterUISettings:
     render_settings.output_path = default_path
     render_settings.multi_pass_path = multi_path
     render_settings.load_sticky_settings(Scene.name())
-    # Backward compatibility for installs that predate the cached text option
-    if not hasattr(render_settings, "use_cached_text"):
-        render_settings.use_cached_text = TextCaching.DEACTIVATE.value
     return render_settings
 
 
