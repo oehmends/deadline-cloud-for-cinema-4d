@@ -8,6 +8,25 @@ from typing import Optional, Tuple
 
 import c4d
 
+try:
+    from .warning_collector import warning_collector
+except ImportError:
+    # Fallback for environments missing warning_collector (older builds or partial installs)
+    class _NullWarningCollector:
+        def add_warning(self, *_, **__):
+            return None
+
+        def has_warnings(self) -> bool:
+            return False
+
+        def get_warnings(self):
+            return []
+
+        def clear_warnings(self):
+            return None
+
+    warning_collector = _NullWarningCollector()
+
 """
 Functionality used for querying scene settings
 """
@@ -126,7 +145,14 @@ class Scene:
             doc = c4d.documents.GetActiveDocument()
             render_data = doc.GetActiveRenderData()
         render_id = render_data[c4d.RDATA_RENDERENGINE]
-        return RendererNames(render_id).name
+        renderer = RendererNames._value2member_map_.get(render_id)
+        if renderer is None:
+            warning_collector.add_warning(
+                f"Renderer with ID {render_id} is not supported by the Deadline submitter. "
+                "Switch to a supported renderer before submitting."
+            )
+            return f"unsupported_renderer_{render_id}"
+        return renderer.name
 
     @staticmethod
     def get_output_directories(render_data=None, take=None) -> set[str]:
