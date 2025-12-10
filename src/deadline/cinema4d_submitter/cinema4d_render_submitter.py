@@ -111,7 +111,8 @@ def _get_parameter_values(
     parameter_values.append(
         {"name": "DetailedLogging", "value": "1" if settings.activate_detailed_logging else "0"}
     )
-    parameter_values.append({"name": "UseCachedText", "value": settings.use_cached_text})
+    use_cached_text = getattr(settings, "use_cached_text", TextCaching.DEACTIVATE.value)
+    parameter_values.append({"name": "UseCachedText", "value": use_cached_text})
 
     if per_take_frames_parameters:
         for take_data in submit_takes:
