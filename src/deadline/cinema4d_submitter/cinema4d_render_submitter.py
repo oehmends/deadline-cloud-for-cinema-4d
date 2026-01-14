@@ -14,6 +14,7 @@ import yaml  # type: ignore[import]
 from qtpy import QtWidgets
 from qtpy.QtCore import Qt  # type: ignore[attr-defined]
 
+from deadline.client.dataclasses import SubmitterInfo
 from deadline.client.exceptions import DeadlineOperationError
 from deadline.client.job_bundle._yaml import deadline_yaml_dump
 from deadline.client.job_bundle.parameters import JobParameter
@@ -47,6 +48,20 @@ from .ui.components import SceneSettingsWidget, SubmissionWarningDialog
 LOADED = False
 
 
+def _get_release_date() -> Optional[str]:
+    """Safely retrieve release date from _version.py.
+
+    Returns:
+        The release date string if available, None otherwise.
+    """
+    try:
+        from ._version import release_date
+
+        return release_date
+    except (ImportError, AttributeError):
+        return None
+
+
 @dataclass
 class TakeData:
     name: str
@@ -60,7 +75,6 @@ class TakeData:
 
 
 def show_submitter():
-
     if _prompt_save_current_document() is False:
         return
 
@@ -175,6 +189,7 @@ def _get_job_template(
     settings: RenderSubmitterUISettings,
     renderers: set[str],
     takes: list[TakeData],
+    has_take_token: bool = False,
 ) -> dict[str, Any]:
     if os.getenv("DEADLINE_COMMAND_TEMPLATE"):
         template = "default_cinema4d_job_template.yaml"
@@ -234,10 +249,23 @@ def _get_job_template(
         else:
             # Update the init data of the step
             init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]
-            init_data["data"] = (
-                "scene_file: '{{Param.Cinema4DFile}}'\ntake: '%s'\noutput_path: '{{Param.OutputPath}}'\nmulti_pass_path: '{{Param.MultiPassPath}}'\nactivate_error_checking: '{{Param.ActivateErrorChecking}}'\nuse_cached_text: '{{Param.UseCachedText}}'"
-                % take_data.name
-            )
+
+            if has_take_token:
+                # Replace $take token with sanitized take name for file path safety
+                # Use original name (not truncated display_name) but sanitize it
+                take_name_for_path = _STRIPPED_PATH_CHARS.sub("_", take_data.name)
+                output_path = settings.output_path.replace("$take", take_name_for_path)
+                multi_pass_path = settings.multi_pass_path.replace("$take", take_name_for_path)
+                init_data["data"] = (
+                    "scene_file: '{{Param.Cinema4DFile}}'\ntake: '%s'\noutput_path: '%s'\nmulti_pass_path: '%s'\nactivate_error_checking: '{{Param.ActivateErrorChecking}}'\nuse_cached_text: '{{Param.UseCachedText}}'"
+                    % (take_data.name, output_path, multi_pass_path)
+                )
+            else:
+                # Use parameter references for paths without $take token
+                init_data["data"] = (
+                    "scene_file: '{{Param.Cinema4DFile}}'\ntake: '%s'\noutput_path: '{{Param.OutputPath}}'\nmulti_pass_path: '{{Param.MultiPassPath}}'\nactivate_error_checking: '{{Param.ActivateErrorChecking}}'\nuse_cached_text: '{{Param.UseCachedText}}'"
+                    % take_data.name
+                )
 
     # If Arnold is one of the renderers, add Arnold-specific parameters
     if "arnold" in renderers:
@@ -379,6 +407,10 @@ def initialize_render_settings() -> RenderSubmitterUISettings:
     return render_settings
 
 
+# Characters to strip from display names (replaced with underscore)
+_STRIPPED_PATH_CHARS = re.compile(r"[|:()\* ]")
+
+
 def get_takes_from_doc(doc: Any) -> dict[str, list[TakeData]]:
     """
     Extracts and organizes take data from the given Cinema 4D document.
@@ -480,16 +512,17 @@ def create_job_bundle(
     if settings.export_job_bundle_to_temp and temp_dir:
         export_to_temp_folder(temp_dir, asset_references)
 
-    submit_takes = takes["main_data_list"]
     job_bundle_path = Path(job_bundle_dir)
-    if settings.take_selection == TakeSelection.MAIN:
-        submit_takes = takes["main_data_list"]
-    elif settings.take_selection == TakeSelection.ALL:
-        submit_takes = takes["take_data_list"]
-    elif settings.take_selection == TakeSelection.MARKED:
-        submit_takes = takes["marked_data_list"]
-    elif settings.take_selection == TakeSelection.CURRENT:
-        submit_takes = takes["current_data_list"]
+    submit_takes = get_submit_takes(settings, takes)
+
+    # Check for $take token BEFORE replacing tokens
+    output_path_before = (
+        settings.output_path if settings.override_output_path else scene_output_path
+    )
+    multi_pass_before = (
+        settings.multi_pass_path if settings.override_multi_pass_path else scene_multi_pass_path
+    )
+    has_take_token = "$take" in (output_path_before or "") or "$take" in (multi_pass_before or "")
 
     # Add overrides to asset references and update the paths with C4D render path tokens.
     if settings.override_output_path:
@@ -522,7 +555,7 @@ def create_job_bundle(
         generate_take_parameter_names(submit_takes)
 
     renderers: set[str] = {take_data.renderer_name for take_data in submit_takes}
-    job_template = _get_job_template(settings, renderers, submit_takes)
+    job_template = _get_job_template(settings, renderers, submit_takes, has_take_token)
     parameter_values = _get_parameter_values(
         settings, queue_parameters, per_take_frames_parameters, submit_takes
     )
@@ -579,7 +612,6 @@ def generate_take_parameter_names(submit_takes: list[TakeData]) -> None:
     parameter_names = set()
 
     for take_number in range(len(submit_takes)):
-
         take_data = submit_takes[take_number]
 
         # First, check for duplicate take names since this will result in overwriting files in the output
@@ -605,7 +637,7 @@ def generate_take_parameter_names(submit_takes: list[TakeData]) -> None:
         # ensure all parameter names are unique
         if parameter_name in parameter_names:
             # example: NewTake_00001
-            parameter_name = f"{parameter_name[:64 - len('Frames') - 6]}_{take_number:05}"
+            parameter_name = f"{parameter_name[: 64 - len('Frames') - 6]}_{take_number:05}"
             if parameter_name in parameter_names:
                 raise RuntimeError(
                     f"Unable to generate unique parameter name for take '{take_name}', please change the take name."
@@ -659,6 +691,43 @@ def get_conda_packages(doc: Any) -> str:
         packages += " cinema4d-c4dtoa"
 
     return packages
+
+
+def get_submit_takes(
+    settings: RenderSubmitterUISettings, takes: dict[str, list[TakeData]]
+) -> list[TakeData]:
+    """
+    Determine which takes will be submitted based on take selection setting.
+    """
+    if settings.take_selection == TakeSelection.MAIN:
+        return takes["main_data_list"]
+    if settings.take_selection == TakeSelection.ALL:
+        return takes["take_data_list"]
+    if settings.take_selection == TakeSelection.MARKED:
+        return takes["marked_data_list"]
+    if settings.take_selection == TakeSelection.CURRENT:
+        return takes["current_data_list"]
+    return takes["main_data_list"]
+
+
+def check_take_token_warnings(
+    settings: RenderSubmitterUISettings, takes: dict[str, list[TakeData]]
+) -> None:
+    """
+    Check if multiple takes are selected without $take token in output paths.
+    Adds a warning if output files will overwrite each other.
+    """
+    submit_takes = get_submit_takes(settings, takes)
+    if len(submit_takes) == 1:
+        return
+    if "$take" in settings.output_path:
+        return
+    if "$take" in settings.multi_pass_path:
+        return
+    warning_collector.add_warning(
+        "Multiple takes are selected but output paths do not contain the $take token. "
+        "This will cause different takes to overwrite each other. Use $take in your path to avoid this."
+    )
 
 
 def export_to_temp_folder(temp_dir: str, asset_references: AssetReferences) -> None:
@@ -745,6 +814,21 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
 
     conda_packages = get_conda_packages(doc)
 
+    # Create SubmitterInfo with all available metadata
+    release_date = _get_release_date()
+    additional_info: Optional[dict[str, Any]] = (
+        {"release_date": release_date} if release_date else None
+    )
+
+    submitter_info = SubmitterInfo(
+        submitter_name="Cinema4D",
+        submitter_package_name="deadline-cloud-for-cinema4d",
+        submitter_package_version=".".join(str(v) for v in adaptor_version_tuple),
+        host_application_name="Cinema 4D",
+        host_application_version=str(c4d.GetC4DVersion()),
+        additional_info=additional_info,
+    )
+
     def on_create_job_bundle_callback(
         widget: SubmitJobToDeadlineDialog,
         job_bundle_dir: str,
@@ -757,7 +841,8 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
         """
         Callback function for creating a job bundle when submitting the job.
         """
-        # Check for warnings and show warning dialog if needed
+        check_take_token_warnings(settings, takes)
+
         if warning_collector.has_warnings():
             continue_submission = SubmissionWarningDialog.show_warnings(
                 warning_collector.get_warnings(), "Issues Detected", widget
@@ -790,6 +875,7 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
         parent=parent,
         f=f,
         show_host_requirements_tab=True,
+        submitter_info=submitter_info,
     )
 
     return submitter_dialog
