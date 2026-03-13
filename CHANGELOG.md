@@ -1,3 +1,34 @@
+## 0.10.0 (2026-03-09)
+
+
+### Features
+* Add tile rendering within submitter. (#401) ([`d0b5be1`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/d0b5be1f1585c3cc1d3c72f95716e0b5138295f7))
+
+### Bug Fixes
+* auto-deduplicate duplicate take names instead of raising an error (#399) ([`dc46680`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/dc46680a057d2a2af9fcd1141981e7b86e8d7643))
+* warn on .rs file detection and add FAQ for nested Redshift proxy files (#396) ([`a190402`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/a19040223eab76b32600d5594e2df91bd2e00251))
+
+## 0.9.2 (2025-12-18)
+
+
+### Bug Fixes
+* Display warning message for $take token missing in both output and multipass paths (#369) ([`d106477`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/d10647777ff39736b072ba1a955a1e2c37a2cba1))
+
+
+
+## 0.9.1 (2025-12-18)
+
+
+### Features
+* add release date to submitter "about" panel (#366) ([`152ee96`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/152ee9686bdfff5e701e63a130c7951db43c5eb8))
+* Add the 'About' panel for the submitter. (#364) ([`5999dde`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/5999dde8c06c703fc48abf52f9bc742520ae0d1b))
+
+### Bug Fixes
+* replace value in path and add warning for missing for multiple… (#365) ([`a303664`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/a3036647b1a4f48e689409a47ef20663960a7af6))
+* do not pathmap Pyro output in C4D 2026 and up (#362) ([`8c79b53`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/8c79b533ff1a9905083bc8c04f8806ad64a7681d))
+* Add timeouts for all the steps and not just the first take. (#360) ([`2b55041`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/2b55041797d13fcdc6e35445fbaf875148a6d314))
+
+
 ## 0.9.0 (2025-12-04)
 
 

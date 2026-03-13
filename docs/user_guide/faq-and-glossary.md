@@ -48,6 +48,22 @@ A: Job attachments enable you to transfer files back and forth between your work
 
 ## Rendering Questions
 
+**Q: Can I use tile rendering to speed up large single-frame renders?**
+
+A: Yes. The submitter has built-in tile rendering support. In the Job-Specific Settings tab, enable **Tile Rendering** and set the number of columns and rows. The submitter splits each frame into a grid of tiles that render in parallel across multiple workers, then automatically assembles them into the final image. See [Tile Rendering](submitter-features.md#tile-rendering) for details.
+
+**Q: My tile render outputs contain intermediary tile files that I don't want. How do I get just the final images?**
+
+A: When you submit a tile rendering job, it creates two steps: a "Render" step and an "Assemble Tiles" step. You can see both steps by selecting your job in the Deadline Cloud monitor and looking at the steps list. Download the output from the "Assemble Tiles" step instead of the "Render" step.
+
+The "Assemble Tiles" step contains only the final full-resolution images. The "Render" step produces the individual tile images (e.g. `image_0_tile_0_0.png`, `image_0_tile_1_0.png`, …) which are intermediary artifacts used as input for assembly.
+
+**Q: How many tiles should I use?**
+
+A: It depends on your scene. A 3×3 or 4×4 grid is a good starting point. More tiles means more parallelism but also more tasks and overhead. The total tasks per frame is (columns × rows) + 1 for assembly. Deadline Cloud has a maximum of 10,000 tasks per step. Exceeding this limit will cause the job to fail with a `CREATE_FAILED` status. 
+
+For example, a 99×99 grid on a single frame would produce 9,801 render tasks, which is close to the limit.
+
 **Q: Can I use Redshift?**
 
 A: Yes! Redshift GPU rendering is supported.
@@ -72,6 +88,12 @@ A: Make sure you've installed the extension correctly and restarted Cinema 4D. C
 
 A: Common causes include missing assets, incorrect file paths, or insufficient memory. Check the job logs in the Deadline Cloud monitor.
 
+**Q: Why are some of my textures or assets missing in the rendered output?**
+
+A: This is typically a path mapping issue. Cinema 4D sometimes stores deep links (absolute paths) to assets in the scene file that cannot be edited. When the scene is submitted and rendered on the farm, it may still reference the original workstation paths even though the assets were uploaded.
+
+**Workaround:** Enable "Save Cinema 4D Project with Assets" in the Job-Specific Settings tab of the submitter. This consolidates all assets into the project folder and fixes the paths before submission, ensuring they render correctly on the farm.
+
 **Q: Can I cancel a job after submitting?**
 
 A: Yes, you can cancel jobs through the Deadline Cloud monitor at any time.
@@ -83,6 +105,11 @@ A: Yes, you can set job priority levels in the submitter to control render queue
 **Q: What is automatic error checking?**
 
 A: The submitter includes built-in error detection to catch common issues like missing assets before submission. This can be deactivated in the submitter.
+
+**Q: Are nested Redshift proxy files detected when submitting Cinema 4D jobs to Deadline?**
+
+A: No, Redshift proxy files are not detected when submitting Cinema 4D jobs to Deadline. This is a limitation of the Redshift *.rs file format. When you export a Cinema 4D scene containing RS Proxy objects to *.rs, all referenced proxy data is flattened/inlined into a single file - no external references are preserved. The Cinema 4D SDK cannot read *.rs files to discover nested dependencies, and the Redshift Core doesn't expose this functionality either.
+Link to the forum post: https://developers.maxon.net/forum/topic/16370/cinema-4d-redshift-nested-redshift-proxy-files-not-detected-by-project-asset-inspector/2
 
 **Q: How do I enable detailed logging for debugging rendering issues?**
 

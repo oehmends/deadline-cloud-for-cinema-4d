@@ -21,7 +21,7 @@ Table of Contents:
 
 To develop the Python code in this repository you will need:
 
-1. Python 3.9 or higher. We recommend [mise](https://github.com/jdx/mise) if you would like to run more than one version
+1. Python 3.10 or higher. We recommend [mise](https://github.com/jdx/mise) if you would like to run more than one version
    of Python on the same system. When running unit tests against all supported Python versions, for instance.
 2. The [hatch](https://github.com/pypa/hatch) package installed (`pip install --upgrade hatch`) into your Python environment.
 3. An install of a supported version of Cinema 4D.
@@ -196,11 +196,11 @@ hatch run test
 We run integration tests by running it in Cinema 4D's python i.e. c4dpy for submitter and using Commandline.exe for adaptor tests. 
 
 #### Test Flow
-1. Scene Generation:
+1. Scene generation:
    - Each test case uses scene generation scripts to create test scenes (and assets if necessary)
    - Scenes are created with specific configurations for testing different scenarios
 
-2. Job Bundle generation:
+2. Job bundle generation:
    - Generated scenes are processed through the submitter code
    - Job bundles are exported to a temporary location within the /integ folder.
 

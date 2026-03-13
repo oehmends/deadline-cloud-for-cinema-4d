@@ -5,6 +5,13 @@ import os
 import traceback
 from typing import Any, Callable, Dict
 
+# The Cinema4D Adaptor adds the `deadline` namespace directory to PYTHONPATH,
+# so that importing just the cinema4d_adaptor should work.
+try:
+    from cinema4d_adaptor.Cinema4DClient import tile_rendering  # type: ignore[import]
+except (ImportError, ModuleNotFoundError):
+    from deadline.cinema4d_adaptor.Cinema4DClient import tile_rendering  # type: ignore[import]
+
 try:
     import c4d  # type: ignore
     import maxon
@@ -31,6 +38,7 @@ OUTPUT_PATH_KEY = "output_path"
 MULTIPASS_PATH_KEY = "multi_pass_path"
 SCENE_FILE_KEY = "scene_file"
 START_RENDER_KEY = "start_render"
+ASSEMBLE_TILES_KEY = "assemble_tiles"
 TAKE_KEY = "take"
 
 
@@ -78,6 +86,7 @@ class Cinema4DHandler:
             TAKE_KEY: self.set_take,
             FRAME_KEY: self.set_frame,
             START_RENDER_KEY: self.start_render,
+            ASSEMBLE_TILES_KEY: self.assemble_tiles,
             OUTPUT_PATH_KEY: self.output_path,
             MULTIPASS_PATH_KEY: self.multi_pass_path,
             USE_CACHED_TEXT_KEY: self.use_cached_text,
@@ -85,6 +94,7 @@ class Cinema4DHandler:
         self.render_kwargs = {}
         self.take = "Main"
         self.map_path = map_path
+        self.has_unmapped_pyro = False
         self.cached_text_was_used_in_previous_frame = False
 
     def _remap_assets(self) -> None:
@@ -139,6 +149,15 @@ class Cinema4DHandler:
                         print(
                             f"{owner}[{param_id}] = {mapped_path} failed. Error: {f} {traceback.format_exc()}"
                         )
+
+        if self.has_unmapped_pyro:
+            print(
+                "Pyro elements were detected in the scene. If the pyro is not appearing in the "
+                "output, the you can use one of the following approaches to resolve the issue:\n"
+                " * Update the scene assets to use localized paths (Project Asset Inspector => [select all assets] => Asset => Localize Filenames)\n"
+                " * Save the scene using 'Save Project with Assets'\n"
+                " * Submit the scene with the 'Save Cinema 4D project with assets before submission' option"
+            )
 
     def _pathmap_recognized_types(
         self, owner, param_id, node_space, node_path, mapped_path
@@ -206,6 +225,12 @@ class Cinema4DHandler:
             if isinstance(existing_path, str) and existing_path:
                 owner[param_id] = mapped_path
                 mapped = True
+        if hasattr(c4d, "Opyro") and owner.GetType() == c4d.Opyro:
+            # Opyro (i.e. Pyro output starting in C4D 2026) actually breaks if you try
+            # to pathmap it, so we will simply return True to indicate that all applicable
+            # pathmapping operations (i.e. none) are complete.
+            self.has_unmapped_pyro = True
+            return True
 
         return mapped
 
@@ -268,11 +293,19 @@ class Cinema4DHandler:
                 self.render_data[c4d.RDATA_MULTIPASS_FILENAME]
             )
 
-        bm = bitmaps.MultipassBitmap(
-            int(self.render_data[c4d.RDATA_XRES]),
-            int(self.render_data[c4d.RDATA_YRES]),
-            c4d.COLORMODE_RGB,
-        )
+        # Set up tile rendering if this is a tile render action
+        tile_action = data.get("tile_action", "")
+        is_tile_render = tile_action == "render"
+        tile_ctx = None
+        if is_tile_render:
+            tile_ctx = tile_rendering.setup_tile_render(self.render_data, data)
+
+        width = int(self.render_data[c4d.RDATA_XRES])
+        height = int(self.render_data[c4d.RDATA_YRES])
+        if is_tile_render:
+            bm = tile_rendering.create_tile_bitmap(width, height)
+        else:
+            bm = bitmaps.MultipassBitmap(width, height, c4d.COLORMODE_RGB)
         rd = self.render_data.GetDataInstance()
 
         self.cached_text_was_used_in_previous_frame = self._cache_text_if_needed(frame_time)
@@ -284,13 +317,22 @@ class Cinema4DHandler:
             c4d.RENDERFLAGS_EXTERNAL | c4d.RENDERFLAGS_SHOWERRORS,
             prog=progress_callback,
         )
+
         result_description = _RENDERRESULT.get(result)
         if result_description is None:
             raise RuntimeError("Error: unhandled render result: %s" % result)
         if result != c4d.RENDERRESULT_OK:
             raise RuntimeError("Error: render result: %s" % result_description)
-        else:
-            print("Finished Rendering")
+
+        # Post-render tile processing: OCIO bake, crop, save tile, restore paths
+        if is_tile_render and tile_ctx is not None:
+            tile_rendering.finalize_tile_render(bm, rd, tile_ctx, self.render_data, frame)
+
+        print("Finished Rendering")
+
+    def assemble_tiles(self, data: dict) -> None:
+        """Assemble tile images into a single full-resolution image."""
+        tile_rendering.assemble_tiles(self.doc, data, self.map_path)
 
     def output_path(self, data: dict) -> None:
         output_path = data.get(OUTPUT_PATH_KEY, "")
@@ -377,20 +419,21 @@ class Cinema4DHandler:
             scene_file, c4d.SCENEFILTER_OBJECTS | c4d.SCENEFILTER_MATERIALS
         )
         if doc is None:
-            print("Error: LoadDocument failed: %s" % scene_file)
-        else:
-            # Build animations, caches and expressions for all frames in the document.
-            # This is essential for dynamic content like Pyro simulations (fluid/smoke effects)
-            # which would otherwise render as blank. The parameters ensure all necessary
-            # elements (animation, expressions, caches) are processed.
-            doc.ExecutePasses(
-                bt=None, animation=True, expressions=True, caches=True, flags=c4d.BUILDFLAGS_NONE
+            raise RuntimeError(
+                f"Failed to load the scene file '{scene_file}'. The file may be corrupt or not a valid Cinema 4D document."
             )
+        # Build animations, caches and expressions for all frames in the document.
+        # This is essential for dynamic content like Pyro simulations (fluid/smoke effects)
+        # which would otherwise render as blank. The parameters ensure all necessary
+        # elements (animation, expressions, caches) are processed.
+        doc.ExecutePasses(
+            bt=None, animation=True, expressions=True, caches=True, flags=c4d.BUILDFLAGS_NONE
+        )
 
-            c4d.documents.InsertBaseDocument(doc)
-            c4d.documents.SetActiveDocument(doc)
-            self.doc = doc
-            self._remap_assets()
+        c4d.documents.InsertBaseDocument(doc)
+        c4d.documents.SetActiveDocument(doc)
+        self.doc = doc
+        self._remap_assets()
 
     def _has_cached_text(self, objects: list[Any]) -> bool:
         for obj in objects:

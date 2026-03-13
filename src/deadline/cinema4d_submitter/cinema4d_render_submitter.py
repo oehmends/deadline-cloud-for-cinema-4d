@@ -14,6 +14,7 @@ import yaml  # type: ignore[import]
 from qtpy import QtWidgets
 from qtpy.QtCore import Qt  # type: ignore[attr-defined]
 
+from deadline.client.dataclasses import SubmitterInfo
 from deadline.client.exceptions import DeadlineOperationError
 from deadline.client.job_bundle._yaml import deadline_yaml_dump
 from deadline.client.job_bundle.parameters import JobParameter
@@ -42,9 +43,26 @@ from .scene import Animation, Scene
 from .style import C4D_STYLE
 from .takes import TakeSelection
 from .template_timeout_patcher import add_timeouts_to_job_template
+from .tile_utils import build_assembly_step, build_tile_task_parameters
 from .ui.components import SceneSettingsWidget, SubmissionWarningDialog
 
 LOADED = False
+
+_TAKE_TOKEN = "$take"
+
+
+def _get_release_date() -> Optional[str]:
+    """Safely retrieve release date from _version.py.
+
+    Returns:
+        The release date string if available, None otherwise.
+    """
+    try:
+        from ._version import release_date
+
+        return release_date
+    except (ImportError, AttributeError):
+        return None
 
 
 @dataclass
@@ -60,7 +78,6 @@ class TakeData:
 
 
 def show_submitter():
-
     if _prompt_save_current_document() is False:
         return
 
@@ -175,6 +192,7 @@ def _get_job_template(
     settings: RenderSubmitterUISettings,
     renderers: set[str],
     takes: list[TakeData],
+    has_take_token: bool = False,
 ) -> dict[str, Any]:
     if os.getenv("DEADLINE_COMMAND_TEMPLATE"):
         template = "default_cinema4d_job_template.yaml"
@@ -228,16 +246,57 @@ def _get_job_template(
                 "{{Param." + take_data.frames_parameter_name + "}}"
             )
 
+        # Add tile parameters when tile rendering is enabled
+        if settings.enable_tile_rendering:
+            tile_params, combination = build_tile_task_parameters(
+                settings.tiles_columns, settings.tiles_rows
+            )
+            parameter_space["taskParameterDefinitions"].extend(tile_params)
+            parameter_space["combination"] = combination
+
         if adaptor is False:
             variables = step["stepEnvironments"][0]["variables"]
             variables["TAKE"] = take_data.name
         else:
-            # Update the init data of the step
-            init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]
-            init_data["data"] = (
-                "scene_file: '{{Param.Cinema4DFile}}'\ntake: '%s'\noutput_path: '{{Param.OutputPath}}'\nmulti_pass_path: '{{Param.MultiPassPath}}'\nactivate_error_checking: '{{Param.ActivateErrorChecking}}'\nuse_cached_text: '{{Param.UseCachedText}}'"
-                % take_data.name
+            # Resolve output paths: use $take-substituted paths or parameter references
+            output_path, multi_pass_path = _resolve_take_paths(
+                settings, take_data.name, has_take_token
             )
+
+            init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]
+            init_data["data"] = deadline_yaml_dump(
+                {
+                    "scene_file": "{{Param.Cinema4DFile}}",
+                    "take": take_data.name,
+                    "output_path": output_path,
+                    "multi_pass_path": multi_pass_path,
+                    "activate_error_checking": "{{Param.ActivateErrorChecking}}",
+                    "use_cached_text": "{{Param.UseCachedText}}",
+                }
+            )
+
+            # Update run-data to include tile region references when tile rendering is enabled
+            if settings.enable_tile_rendering:
+                run_data = step["script"]["embeddedFiles"][0]
+                run_data["data"] = deadline_yaml_dump(
+                    {
+                        "frame": "{{Task.Param.Frame}}",
+                        "tile_action": "render",
+                        "current_tile_column": "{{Task.Param.TileCol}}",
+                        "current_tile_row": "{{Task.Param.TileRow}}",
+                        "total_tiles_column": settings.tiles_columns,
+                        "total_tiles_row": settings.tiles_rows,
+                    }
+                )
+
+    # Add tile assembly steps (one per render step) when tile rendering is enabled
+    if settings.enable_tile_rendering and adaptor:
+        render_steps = list(job_template["steps"])
+        for idx, render_step in enumerate(render_steps):
+            take_name = takes[idx].name
+            output_path, multi_pass_path = _resolve_take_paths(settings, take_name, has_take_token)
+            assembly_step = build_assembly_step(render_step, settings, output_path, multi_pass_path)
+            job_template["steps"].append(assembly_step)
 
     # If Arnold is one of the renderers, add Arnold-specific parameters
     if "arnold" in renderers:
@@ -379,6 +438,25 @@ def initialize_render_settings() -> RenderSubmitterUISettings:
     return render_settings
 
 
+# Characters to strip from display names (replaced with underscore)
+_STRIPPED_PATH_CHARS = re.compile(r"[|:()\* ]")
+
+
+def _resolve_take_paths(
+    settings: RenderSubmitterUISettings,
+    take_name: Optional[str],
+    has_take_token: bool,
+) -> tuple[str, str]:
+    """Resolve output_path and multi_pass_path, substituting $take if present."""
+    if has_take_token and take_name is not None:
+        take_name_for_path = _STRIPPED_PATH_CHARS.sub("_", take_name)
+        return (
+            settings.output_path.replace(_TAKE_TOKEN, take_name_for_path),
+            settings.multi_pass_path.replace(_TAKE_TOKEN, take_name_for_path),
+        )
+    return "{{Param.OutputPath}}", "{{Param.MultiPassPath}}"
+
+
 def get_takes_from_doc(doc: Any) -> dict[str, list[TakeData]]:
     """
     Extracts and organizes take data from the given Cinema 4D document.
@@ -480,16 +558,19 @@ def create_job_bundle(
     if settings.export_job_bundle_to_temp and temp_dir:
         export_to_temp_folder(temp_dir, asset_references)
 
-    submit_takes = takes["main_data_list"]
     job_bundle_path = Path(job_bundle_dir)
-    if settings.take_selection == TakeSelection.MAIN:
-        submit_takes = takes["main_data_list"]
-    elif settings.take_selection == TakeSelection.ALL:
-        submit_takes = takes["take_data_list"]
-    elif settings.take_selection == TakeSelection.MARKED:
-        submit_takes = takes["marked_data_list"]
-    elif settings.take_selection == TakeSelection.CURRENT:
-        submit_takes = takes["current_data_list"]
+    submit_takes = get_submit_takes(settings, takes)
+
+    # Check for $take token BEFORE replacing tokens
+    output_path_before = (
+        settings.output_path if settings.override_output_path else scene_output_path
+    )
+    multi_pass_before = (
+        settings.multi_pass_path if settings.override_multi_pass_path else scene_multi_pass_path
+    )
+    has_take_token = _TAKE_TOKEN in (output_path_before or "") or _TAKE_TOKEN in (
+        multi_pass_before or ""
+    )
 
     # Add overrides to asset references and update the paths with C4D render path tokens.
     if settings.override_output_path:
@@ -516,13 +597,14 @@ def create_job_bundle(
         take.frame_range != first_frame_range for take in submit_takes
     )
 
-    # If there are multiple frame ranges and we're not overriding the range,
-    # then we create per-take Frames parameters.
+    # Deduplicate take names, then generate per-take Frames parameters
+    # if there are multiple frame ranges and we're not overriding the range.
+    deduplicate_take_names(submit_takes)
     if per_take_frames_parameters:
         generate_take_parameter_names(submit_takes)
 
     renderers: set[str] = {take_data.renderer_name for take_data in submit_takes}
-    job_template = _get_job_template(settings, renderers, submit_takes)
+    job_template = _get_job_template(settings, renderers, submit_takes, has_take_token)
     parameter_values = _get_parameter_values(
         settings, queue_parameters, per_take_frames_parameters, submit_takes
     )
@@ -560,6 +642,84 @@ def create_job_bundle(
     }
 
 
+def _find_duplicate_take_names(submit_takes: list[TakeData]) -> set[str]:
+    """Returns the set of take names that appear more than once."""
+    name_counts: dict[str, int] = {}
+    for take in submit_takes:
+        name_counts[take.name] = name_counts.get(take.name, 0) + 1
+    return {name for name, count in name_counts.items() if count > 1}
+
+
+def deduplicate_take_names(submit_takes: list[TakeData]) -> None:
+    """
+    Checks for duplicate take names and makes them unique by appending
+    _1, _2, etc. suffixes. Handles collisions with existing take names
+    (e.g. 'take', 'take', 'take_1' won't produce two 'take_1' entries).
+    """
+    duplicated_names = _find_duplicate_take_names(submit_takes)
+    if not duplicated_names:
+        return
+
+    _validate_duplicate_name_lengths(duplicated_names)
+
+    all_names = {take.name for take in submit_takes}
+    next_suffix: dict[str, int] = dict.fromkeys(duplicated_names, 1)
+
+    for take in submit_takes:
+        if take.name in next_suffix:
+            new_name, next_start = _generate_unique_name(
+                take.name, next_suffix[take.name], all_names
+            )
+            _apply_take_name(take, new_name)
+            all_names.add(new_name)
+            next_suffix[take.name] = next_start
+
+
+def _validate_duplicate_name_lengths(duplicated_names: set[str]) -> None:
+    """Raises RuntimeError if any duplicated take name is already at the 64-char limit."""
+    for name in duplicated_names:
+        if len(name) >= 64:
+            raise RuntimeError(
+                f"Multiple takes share the name '{name}', which is already 64 characters long. "
+                "Please shorten or rename the duplicate takes so they can be uniquely identified."
+            )
+
+
+def _generate_unique_name(
+    original_name: str, start_suffix: int, existing_names: set[str]
+) -> tuple[str, int]:
+    """Finds the next available suffixed name that doesn't collide with existing names.
+
+    Returns the unique name and the next suffix to try for this original name.
+    """
+    suffix = start_suffix
+    new_name = f"{original_name}_{suffix}"
+    while new_name in existing_names:
+        suffix += 1
+        new_name = f"{original_name}_{suffix}"
+    return new_name, suffix + 1
+
+
+def _apply_take_name(take: TakeData, new_name: str) -> None:
+    """Applies a new name to a take, truncating display_name to 64 characters."""
+    take.name = new_name
+    take.display_name = new_name[:64]
+
+
+def warn_duplicate_take_names(submit_takes: list[TakeData]) -> None:
+    """
+    Checks for duplicate take names and adds a warning via warning_collector
+    if any are found.
+    """
+    duplicated_names = _find_duplicate_take_names(submit_takes)
+    if duplicated_names:
+        renamed_list = ", ".join(f"'{name}'" for name in sorted(duplicated_names))
+        warning_collector.add_warning(
+            f"Duplicate take names were found: {renamed_list}. "
+            "They have been automatically renamed with _1, _2, etc. suffixes to ensure uniqueness."
+        )
+
+
 def generate_take_parameter_names(submit_takes: list[TakeData]) -> None:
     """
     This function generates unique take frame range parameter names
@@ -575,26 +735,13 @@ def generate_take_parameter_names(submit_takes: list[TakeData]) -> None:
     # parameter names must only contain letters, numbers, or underscores
     removed_job_parameter_chars = re.compile("[^a-zA-Z0-9_]")
 
-    take_names = set()
     parameter_names = set()
 
     for take_number in range(len(submit_takes)):
-
         take_data = submit_takes[take_number]
-
-        # First, check for duplicate take names since this will result in overwriting files in the output
-        # or other unexpected behaviour
-        # We do this here rather than earlier in submission because we get an error popup
-        # (rather than a quieter console error) for errors here.
         take_name = take_data.name
-        if take_name in take_names:
-            raise RuntimeError(
-                f"You have multiple takes named '{take_name}' with different render settings among the takes. "
-                "Please use unique take names."
-            )
-        take_names.add(take_name)
 
-        # Now, determine the frame parameter name
+        # determine the frame parameter name
         # remove all disallowed characters
         parameter_name = removed_job_parameter_chars.sub("", take_data.display_name)[
             : 64 - len("Frames")
@@ -605,7 +752,7 @@ def generate_take_parameter_names(submit_takes: list[TakeData]) -> None:
         # ensure all parameter names are unique
         if parameter_name in parameter_names:
             # example: NewTake_00001
-            parameter_name = f"{parameter_name[:64 - len('Frames') - 6]}_{take_number:05}"
+            parameter_name = f"{parameter_name[: 64 - len('Frames') - 6]}_{take_number:05}"
             if parameter_name in parameter_names:
                 raise RuntimeError(
                     f"Unable to generate unique parameter name for take '{take_name}', please change the take name."
@@ -659,6 +806,43 @@ def get_conda_packages(doc: Any) -> str:
         packages += " cinema4d-c4dtoa"
 
     return packages
+
+
+def get_submit_takes(
+    settings: RenderSubmitterUISettings, takes: dict[str, list[TakeData]]
+) -> list[TakeData]:
+    """
+    Determine which takes will be submitted based on take selection setting.
+    """
+    if settings.take_selection == TakeSelection.MAIN:
+        return takes["main_data_list"]
+    if settings.take_selection == TakeSelection.ALL:
+        return takes["take_data_list"]
+    if settings.take_selection == TakeSelection.MARKED:
+        return takes["marked_data_list"]
+    if settings.take_selection == TakeSelection.CURRENT:
+        return takes["current_data_list"]
+    return takes["main_data_list"]
+
+
+def check_take_token_warnings(
+    settings: RenderSubmitterUISettings, takes: dict[str, list[TakeData]]
+) -> None:
+    """
+    Check if multiple takes are selected without $take token in output paths.
+    Adds a warning if output files will overwrite each other.
+    """
+    submit_takes = get_submit_takes(settings, takes)
+    if len(submit_takes) == 1:
+        return
+    if _TAKE_TOKEN in settings.output_path:
+        return
+    if _TAKE_TOKEN in settings.multi_pass_path:
+        return
+    warning_collector.add_warning(
+        f"Multiple takes are selected but output paths do not contain the {_TAKE_TOKEN} token. "
+        f"This will cause different takes to overwrite each other. Use {_TAKE_TOKEN} in your path to avoid this."
+    )
 
 
 def export_to_temp_folder(temp_dir: str, asset_references: AssetReferences) -> None:
@@ -745,6 +929,21 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
 
     conda_packages = get_conda_packages(doc)
 
+    # Create SubmitterInfo with all available metadata
+    release_date = _get_release_date()
+    additional_info: Optional[dict[str, Any]] = (
+        {"release_date": release_date} if release_date else None
+    )
+
+    submitter_info = SubmitterInfo(
+        submitter_name="Cinema4D",
+        submitter_package_name="deadline-cloud-for-cinema4d",
+        submitter_package_version=".".join(str(v) for v in adaptor_version_tuple),
+        host_application_name="Cinema 4D",
+        host_application_version=str(c4d.GetC4DVersion()),
+        additional_info=additional_info,
+    )
+
     def on_create_job_bundle_callback(
         widget: SubmitJobToDeadlineDialog,
         job_bundle_dir: str,
@@ -757,7 +956,11 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
         """
         Callback function for creating a job bundle when submitting the job.
         """
-        # Check for warnings and show warning dialog if needed
+        submit_takes = get_submit_takes(settings, takes)
+        warn_duplicate_take_names(submit_takes)
+
+        check_take_token_warnings(settings, takes)
+
         if warning_collector.has_warnings():
             continue_submission = SubmissionWarningDialog.show_warnings(
                 warning_collector.get_warnings(), "Issues Detected", widget
@@ -790,6 +993,7 @@ def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
         parent=parent,
         f=f,
         show_host_requirements_tab=True,
+        submitter_info=submitter_info,
     )
 
     return submitter_dialog
