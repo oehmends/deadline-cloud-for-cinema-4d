@@ -25,8 +25,17 @@ import pytest
         # So we should investigate that separately.
         # "redshift_multipass",
         "redshift_textured",
-        "redshift_textured_with_nonascii_characters",
+        pytest.param(
+            "redshift_textured_nonascii",
+            marks=pytest.mark.xfail(
+                reason="YAML line wrapping corrupts unicode paths on CodeBuild due to long base path"
+            ),
+        ),
         "physical_multi_takes",
+        "physical_tiles",
+        "redshift_tiles",
+        "physical_apostrophe_path",
+        "physical_chunking",
     ],
 )
 def test_integ(

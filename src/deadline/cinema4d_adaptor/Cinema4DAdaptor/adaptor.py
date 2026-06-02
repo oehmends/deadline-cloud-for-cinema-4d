@@ -303,6 +303,17 @@ class Cinema4DAdaptor(Adaptor[AdaptorConfiguration]):
                 )
             )
 
+            nvidia_driver_regexes = re.compile(
+                r".*(?:Please make sure you have NVIDIA driver (\S+) or later installed|requires driver (\S+) but has (\S+)).*",
+                re.IGNORECASE,
+            )
+            callback_list.append(
+                RegexCallback(
+                    [nvidia_driver_regexes],
+                    self._handle_nvidia_driver_error,
+                )
+            )
+
             self._regex_callbacks = callback_list
         return self._regex_callbacks
 
@@ -333,7 +344,9 @@ class Cinema4DAdaptor(Adaptor[AdaptorConfiguration]):
         percent = text[loc : loc + 2]
         # check for % in case of single digit progress
         percent = percent[0] if percent.endswith("%") else percent
-        progress = int(percent)
+        # C4D can report progress > 100%. This is also clamped in progress_callback(),
+        # but we clamp here too to prevent regression if progress_callback() is modified.
+        progress = min(int(percent), 100)
         self.update_status(progress=progress)
 
     def _handle_error(self, match: re.Match) -> None:
@@ -365,6 +378,30 @@ class Cinema4DAdaptor(Adaptor[AdaptorConfiguration]):
             f"Error: {match.group(0)}"
         )
 
+        self._exc_info = RuntimeError(message)
+
+    def _handle_nvidia_driver_error(self, match: re.Match) -> None:
+        """
+        Handle NVIDIA driver incompatibility errors during Redshift rendering.
+
+        Args:
+            match (re.Match): The match object from the regex pattern that was matched
+
+        Raises:
+            RuntimeError: Raised when the NVIDIA driver is incompatible with Redshift
+        """
+        required_version = match.group(1) or match.group(2)
+        current_version = match.group(3) if match.lastindex and match.lastindex >= 3 else None
+
+        if current_version:
+            detail = f"The worker has driver {current_version} but Redshift requires {required_version} or later."
+        else:
+            detail = f"Redshift requires NVIDIA driver version {required_version} or later."
+        message = (
+            f"{detail} "
+            "Please update the NVIDIA drivers on your worker fleet. "
+            f"Error: {match.group(0)}"
+        )
         self._exc_info = RuntimeError(message)
 
     def _add_deadline_openjd_paths(self) -> None:
@@ -499,15 +536,17 @@ class Cinema4DAdaptor(Adaptor[AdaptorConfiguration]):
 
     def on_run(self, run_data: dict) -> None:
         """
-        This starts a render in Cinema4D for the given frame, scene and layer(s) and
+        This starts a render in Cinema4D for the given frame(s), scene and layer(s) and
         performs a busy wait until the render completes.
+
+        Supports both single frames (e.g. "5") and contiguous chunk ranges (e.g. "1-10")
+        from the TASK_CHUNKING extension.
         """
         self.validators.run_data.validate(run_data)
 
         if not self._cinema4d_is_running:
             raise Cinema4DNotRunningError("Cannot render because Cinema4D is not running.")
 
-        run_data["frame"] = int(run_data["frame"])
         self._is_rendering = True
 
         for name in _CINEMA4D_RUN_KEYS:

@@ -1,14 +1,10 @@
 parameterValues:
 - name: Cinema4DFile
-  value: "PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\\test\\integ\\\
-    test_scenes\\redshift_textured_with_nonascii_characters\\generated_bundle\\redshift_textured-_\u20BF\
-    _\u0119_\xF1_\u03B2_\u0411_\u062A.c4d"
+  value: PATH_TO_BE_REPLACED\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_apostrophe_path\generated_bundle\it's\physical_apostrophe_path.c4d
 - name: SubmitterIntegrationVersion
   value: 0.8.0
 - name: OutputPath
-  value: "PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\\test\\integ\\\
-    test_scenes\\redshift_textured_with_nonascii_characters\\generated_bundle\\renders\\\
-    redshift_textured-_\u20BF_\u0119_\xF1_\u03B2_\u0411_\u062A"
+  value: PATH_TO_BE_REPLACED\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_apostrophe_path\generated_bundle\renders\physical_apostrophe_path
 - name: MultiPassPath
   value: ''
 - name: ActivateErrorChecking
@@ -17,6 +13,10 @@ parameterValues:
   value: '0'
 - name: UseCachedText
   value: '0'
+- name: ChunkSize
+  value: 1
+- name: TargetChunkDuration
+  value: 0
 - name: Frames
   value: '1'
 - name: CondaPackages

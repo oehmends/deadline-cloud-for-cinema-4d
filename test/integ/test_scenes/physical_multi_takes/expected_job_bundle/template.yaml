@@ -1,4 +1,6 @@
 specificationVersion: jobtemplate-2023-09
+extensions:
+- TASK_CHUNKING
 name: physical_multi_takes.c4d
 parameterDefinitions:
 - name: Cinema4DFile
@@ -24,6 +26,26 @@ parameterDefinitions:
     label: Submitter Integration Version
     groupLabel: Cinema4D Settings
   description: The Cinema 4D submitter integration version.
+- name: ChunkSize
+  type: INT
+  default: 1
+  minValue: 1
+  description: |
+    Number of frames per chunk. Use 1 for one frame per task (default). Higher values group frames into chunks to reduce per-task overhead.
+  userInterface:
+    control: SPIN_BOX
+    label: Frames Per Chunk
+    groupLabel: Cinema4D Settings
+- name: TargetChunkDuration
+  type: INT
+  default: 0
+  minValue: 0
+  description: |
+    Target render time per chunk in seconds. Deadline Cloud will automatically adjust how many frames are grouped together to hit this target. Set to 0 to always use the fixed frames-per-chunk value.
+  userInterface:
+    control: SPIN_BOX
+    label: Target Chunk Duration (Seconds)
+    groupLabel: Cinema4D Settings
 - name: OutputPath
   type: PATH
   objectType: FILE
@@ -202,8 +224,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.MainFrames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -215,13 +241,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'Main'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_Main'
-          multi_pass_path: ''
+        data: |
+          take: Main
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_Main
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -253,7 +279,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -271,8 +297,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0123456789abcdef0123456789abcdef0123456789abcdef012345678Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -284,13 +314,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdei1234'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdei1234'
-          multi_pass_path: ''
+        data: |
+          take: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdei1234
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdei1234
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -322,7 +352,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -340,8 +370,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0123456789abcdef0123456789abcdef0123456789abcdef012_00002Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -353,13 +387,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeh1234'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeh1234'
-          multi_pass_path: ''
+        data: |
+          take: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeh1234
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeh1234
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -391,7 +425,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -409,8 +443,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0123456789abcdef0123456789abcdef0123456789abcdef012_00003Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -422,13 +460,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg'
-          multi_pass_path: ''
+        data: |
+          take: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdeg
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -460,7 +498,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -478,8 +516,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0123456789abcdef0123456789abcdef0123456789abcdef012_00004Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -491,13 +533,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
-          multi_pass_path: ''
+        data: |
+          take: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -529,7 +571,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -547,8 +589,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0123456789abcdef0123456789abcdef0123456789abcdef789abcdegFrames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -560,13 +606,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: '0123456789abcdef0123456789abcdef0123456789abcdef789abcdeg'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef789abcdeg'
-          multi_pass_path: ''
+        data: |
+          take: 0123456789abcdef0123456789abcdef0123456789abcdef789abcdeg
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef789abcdeg
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -598,7 +644,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -616,8 +662,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0123456789abcdef0123456789abcdef0123456789abcdef789abcdefFrames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -629,13 +679,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: '0123456789abcdef0123456789abcdef0123456789abcdef789abcdef'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef789abcdef'
-          multi_pass_path: ''
+        data: |
+          take: 0123456789abcdef0123456789abcdef0123456789abcdef789abcdef
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0123456789abcdef0123456789abcdef0123456789abcdef789abcdef
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -667,7 +717,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -685,8 +735,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.abcdef124Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -698,13 +752,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'abcdef124'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_abcdef124'
-          multi_pass_path: ''
+        data: |
+          take: abcdef124
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_abcdef124
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -736,7 +790,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -754,8 +808,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.abcdef123Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -767,13 +825,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'abcdef123'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_abcdef123'
-          multi_pass_path: ''
+        data: |
+          take: abcdef123
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_abcdef123
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -805,7 +863,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -823,8 +881,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.test_Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -836,13 +898,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
+        data: |
           take: '{}|:test!@#$%^&*()_'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_{}__test!@#$%^&____'
-          multi_pass_path: ''
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_{}__test!@#$%^&____
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -874,7 +936,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -892,8 +954,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.helloFrames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -905,13 +971,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'he llo'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_he_llo'
-          multi_pass_path: ''
+        data: |
+          take: he llo
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_he_llo
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -943,7 +1009,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -961,8 +1027,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.hello_00011Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -974,13 +1044,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'hello'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_hello'
-          multi_pass_path: ''
+        data: |
+          take: hello
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_hello
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -1012,7 +1082,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -1030,8 +1100,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param._0Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -1043,13 +1117,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
+        data: |
           take: '0'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0'
-          multi_pass_path: ''
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_0
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -1081,7 +1155,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -1099,8 +1173,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.BFrames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -1112,13 +1190,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'B'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_B'
-          multi_pass_path: ''
+        data: |
+          take: B
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_B
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -1150,7 +1228,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd
@@ -1168,8 +1246,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.AFrames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -1181,13 +1263,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'A'
-          output_path: 'PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_A'
-          multi_pass_path: ''
+        data: |
+          take: A
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\\deadline-cloud-for-cinema-4d\test\integ\test_scenes\physical_multi_takes\generated_bundle\renders\physical_multi_takes_A
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -1219,7 +1301,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd

@@ -62,10 +62,10 @@ def progress_callback(progress_percent, progress_type_int):
     else:
         progress_type_text = f"Unknown progress type ({progress_type_int})"
 
-    print(f"Progress update ({progress_type_text}): {progress_percent * 100.0}%")
+    print(f"Progress update ({progress_type_text}): {min(progress_percent * 100.0, 100.0)}%")
 
     if progress_type_int == c4d.RENDERPROGRESSTYPE_DURINGRENDERING:
-        print("ALF_PROGRESS %g" % (progress_percent * 100))
+        print("ALF_PROGRESS %g" % min(progress_percent * 100, 100))
 
 
 class Cinema4DHandler:
@@ -266,6 +266,16 @@ class Cinema4DHandler:
             transaction.Commit()
         return True
 
+    @staticmethod
+    def _parse_frame_range(frame_value) -> tuple[int, int]:
+        """Parse a frame value into (start, end). Handles '5', '5-5', and '1-10'."""
+        frame_str = str(frame_value).strip()
+        if "-" in frame_str:
+            parts = frame_str.split("-", 1)
+            return int(parts[0]), int(parts[1])
+        frame = int(frame_str)
+        return frame, frame
+
     def start_render(self, data: dict) -> None:
         if self.cached_text_was_used_in_previous_frame:
             # Close and then reload document since we collapsed some text in the previous frame
@@ -275,12 +285,14 @@ class Cinema4DHandler:
 
         self.render_data = self.doc.GetActiveRenderData()
         self.render_data[c4d.RDATA_FRAMESEQUENCE] = c4d.RDATA_FRAMESEQUENCE_MANUAL
-        self.render_kwargs[FRAME_KEY] = int(self.render_kwargs.get(FRAME_KEY, data[FRAME_KEY]))
-        frame = self.render_kwargs[FRAME_KEY]
+
+        frame_value = self.render_kwargs.get(FRAME_KEY, data[FRAME_KEY])
+        start_frame, end_frame = self._parse_frame_range(frame_value)
+        self.render_kwargs[FRAME_KEY] = start_frame
+
         fps = self.doc.GetFps()
-        frame_time = c4d.BaseTime(frame, fps)
-        self.render_data[c4d.RDATA_FRAMEFROM] = frame_time
-        self.render_data[c4d.RDATA_FRAMETO] = frame_time
+        self.render_data[c4d.RDATA_FRAMEFROM] = c4d.BaseTime(start_frame, fps)
+        self.render_data[c4d.RDATA_FRAMETO] = c4d.BaseTime(end_frame, fps)
         self.render_data[c4d.RDATA_FRAMESTEP] = 1
 
         if self.render_data[c4d.RDATA_PATH]:
@@ -308,7 +320,9 @@ class Cinema4DHandler:
             bm = bitmaps.MultipassBitmap(width, height, c4d.COLORMODE_RGB)
         rd = self.render_data.GetDataInstance()
 
-        self.cached_text_was_used_in_previous_frame = self._cache_text_if_needed(frame_time)
+        self.cached_text_was_used_in_previous_frame = self._cache_text_if_needed(
+            c4d.BaseTime(start_frame, fps)
+        )
 
         result = c4d.documents.RenderDocument(
             self.doc,
@@ -326,7 +340,7 @@ class Cinema4DHandler:
 
         # Post-render tile processing: OCIO bake, crop, save tile, restore paths
         if is_tile_render and tile_ctx is not None:
-            tile_rendering.finalize_tile_render(bm, rd, tile_ctx, self.render_data, frame)
+            tile_rendering.finalize_tile_render(bm, rd, tile_ctx, self.render_data, start_frame)
 
         print("Finished Rendering")
 
@@ -394,12 +408,15 @@ class Cinema4DHandler:
 
     def set_frame(self, data: dict) -> None:
         """
-        Sets the frame to render
+        Sets the frame or frame range to render.
+
+        Accepts a single frame (e.g. "5") or a contiguous range (e.g. "1-10")
+        from the TASK_CHUNKING extension.
 
         Args:
             data (dict):
         """
-        self.render_kwargs[FRAME_KEY] = int(data[FRAME_KEY])
+        self.render_kwargs[FRAME_KEY] = data[FRAME_KEY]
 
     def set_scene_file(self, data: dict) -> None:
         """

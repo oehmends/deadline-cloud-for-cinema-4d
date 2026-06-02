@@ -1,4 +1,6 @@
 specificationVersion: jobtemplate-2023-09
+extensions:
+- TASK_CHUNKING
 name: redshift_takes.c4d
 parameterDefinitions:
 - name: Cinema4DFile
@@ -32,6 +34,26 @@ parameterDefinitions:
     groupLabel: Cinema4D Settings
   description: The frames to render. E.g. 1-3,8,11-15
   minLength: 1
+- name: ChunkSize
+  type: INT
+  default: 1
+  minValue: 1
+  description: |
+    Number of frames per chunk. Use 1 for one frame per task (default). Higher values group frames into chunks to reduce per-task overhead.
+  userInterface:
+    control: SPIN_BOX
+    label: Frames Per Chunk
+    groupLabel: Cinema4D Settings
+- name: TargetChunkDuration
+  type: INT
+  default: 0
+  minValue: 0
+  description: |
+    Target render time per chunk in seconds. Deadline Cloud will automatically adjust how many frames are grouped together to hit this target. Set to 0 to always use the fixed frames-per-chunk value.
+  userInterface:
+    control: SPIN_BOX
+    label: Target Chunk Duration (Seconds)
+    groupLabel: Cinema4D Settings
 - name: OutputPath
   type: PATH
   objectType: FILE
@@ -88,8 +110,12 @@ steps:
   parameterSpace:
     taskParameterDefinitions:
     - name: Frame
-      type: INT
+      type: CHUNK[INT]
       range: '{{Param.Frames}}'
+      chunks:
+        defaultTaskCount: '{{Param.ChunkSize}}'
+        targetRuntimeSeconds: '{{Param.TargetChunkDuration}}'
+        rangeConstraint: CONTIGUOUS
   stepEnvironments:
   - name: Cinema4D
     description: Runs Cinema4D in the background.
@@ -101,13 +127,13 @@ steps:
       - name: initData
         filename: init-data.yaml
         type: TEXT
-        data: |-
-          scene_file: '{{Param.Cinema4DFile}}'
-          take: 'Main'
-          output_path: 'PATH_TO_BE_REPLACED\deadline-cloud-for-cinema-4d\test\integ\test_scenes\redshift_takes\generated_bundle\renders\redshift_takes_Main'
-          multi_pass_path: ''
+        data: |
+          take: Main
           activate_error_checking: '{{Param.ActivateErrorChecking}}'
           use_cached_text: '{{Param.UseCachedText}}'
+          scene_file: {{Param.Cinema4DFile}}
+          output_path: PATH_TO_BE_REPLACED\deadline-cloud-for-cinema-4d\test\integ\test_scenes\redshift_takes\generated_bundle\renders\redshift_takes_Main
+          multi_pass_path: ''
       actions:
         onEnter:
           command: cinema4d-openjd
@@ -139,7 +165,7 @@ steps:
       filename: run-data.yaml
       type: TEXT
       data: |
-        frame: {{Task.Param.Frame}}
+        frame: '{{Task.Param.Frame}}'
     actions:
       onRun:
         command: cinema4d-openjd

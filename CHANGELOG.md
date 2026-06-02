@@ -1,3 +1,30 @@
+
+## 0.11.1 (2026-04-22)
+
+
+### Features
+* You will now be notified within Cinema 4D if a newer version of the submitter is available. (#414)
+* The adaptor now uses contiguous frame chunking (e.g. "1-10" instead of "1") for task ranges. Jobs submitted with this version require a worker agent that supports the TASK_CHUNKING extension. (#415)
+
+### Bug Fixes
+* Tile rendering is now supported in Cinema 4D 2024. (#433)
+* Opening the submitter on an empty project now shows a dialog prompting you to open a project instead of crashing. (#432)
+* Render progress is now clamped to 100%, preventing occasional reports of progress exceeding 100%. (#429)
+* Reduced the adaptor package size by moving GUI dependencies outside of the adaptor runtime requirements. (#422)
+* Fixed YAML delimiter handling in file paths, resolving issues with path mappings. (#408)
+
+
+## 0.10.1 (2026-03-26)
+
+
+### Features
+* Bundle GUI dependencies within Cinema 4D submitter installer. (#417) ([`a583eb7`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/a583eb79de17685da9667146aa6e043e598b0722))
+
+### Bug Fixes
+* Provide better instructions with Redshift/Nvidia version drivers (#405) ([`bd3b951`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/bd3b95110d74c1dc2b8918483f2b02fc3701a200))
+* Fail fast with clear error when LoadDocument fails on corrupted file (#404) ([`3e50dde`](https://github.com/aws-deadline/deadline-cloud-for-cinema-4d/commit/3e50ddedf80e5a92e5f60e55718711ee33968c3e))
+
+
 ## 0.10.0 (2026-03-09)
 
 

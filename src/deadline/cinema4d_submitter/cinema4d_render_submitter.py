@@ -45,6 +45,8 @@ from .takes import TakeSelection
 from .template_timeout_patcher import add_timeouts_to_job_template
 from .tile_utils import build_assembly_step, build_tile_task_parameters
 from .ui.components import SceneSettingsWidget, SubmissionWarningDialog
+from ._yaml_utils import _build_embedded_yaml
+from .update_utils import check_and_show_update_dialog
 
 LOADED = False
 
@@ -88,6 +90,9 @@ def show_submitter():
             app.setQuitOnLastWindowClosed(False)
             app.aboutToQuit.connect(app.deleteLater)
 
+        if check_and_show_update_dialog():
+            return
+
         # Get the scene file's directory path to create the temporary directory
         # in the same location as the original scene file. This ensures consistent
         # path resolution across platforms and avoids path mapping errors,
@@ -99,7 +104,7 @@ def show_submitter():
         with tempfile.TemporaryDirectory(
             prefix="scene_with_assets_", dir=scene_dir_path
         ) as temp_dir:
-            app.setStyleSheet(C4D_STYLE)
+            app.setStyleSheet(C4D_STYLE)  # type: ignore[attr-defined]
             w = _show_submitter(temp_dir, None)
             w.setStyleSheet(C4D_STYLE)
             w.exec_()
@@ -134,8 +139,12 @@ def _get_parameter_values(
     parameter_values.append(
         {"name": "DetailedLogging", "value": "1" if settings.activate_detailed_logging else "0"}
     )
-    use_cached_text = getattr(settings, "use_cached_text", TextCaching.DEACTIVATE.value)
-    parameter_values.append({"name": "UseCachedText", "value": use_cached_text})
+    parameter_values.append({"name": "UseCachedText", "value": settings.use_cached_text})
+    # Set chunking parameter values
+    parameter_values.append({"name": "ChunkSize", "value": settings.chunk_size})
+    parameter_values.append(
+        {"name": "TargetChunkDuration", "value": settings.target_chunk_duration}
+    )
 
     if per_take_frames_parameters:
         for take_data in submit_takes:
@@ -264,7 +273,7 @@ def _get_job_template(
             )
 
             init_data = step["stepEnvironments"][0]["script"]["embeddedFiles"][0]
-            init_data["data"] = deadline_yaml_dump(
+            init_data["data"] = _build_embedded_yaml(
                 {
                     "scene_file": "{{Param.Cinema4DFile}}",
                     "take": take_data.name,
@@ -272,13 +281,14 @@ def _get_job_template(
                     "multi_pass_path": multi_pass_path,
                     "activate_error_checking": "{{Param.ActivateErrorChecking}}",
                     "use_cached_text": "{{Param.UseCachedText}}",
-                }
+                },
+                unquoted_keys={"scene_file", "output_path", "multi_pass_path"},
             )
 
             # Update run-data to include tile region references when tile rendering is enabled
             if settings.enable_tile_rendering:
                 run_data = step["script"]["embeddedFiles"][0]
-                run_data["data"] = deadline_yaml_dump(
+                run_data["data"] = _build_embedded_yaml(
                     {
                         "frame": "{{Task.Param.Frame}}",
                         "tile_action": "render",
@@ -383,6 +393,13 @@ def _get_job_template(
 
 def _prompt_save_current_document():
     doc = c4d.documents.GetActiveDocument()
+    if not doc.GetDocumentPath():
+        c4d.gui.MessageDialog(
+            "Please open an existing project or save the current scene to disk\n"
+            "before launching the submitter."
+        )
+        return False
+
     if not doc.GetChanged():
         # Document has no unsaved changes
         return True
@@ -447,14 +464,22 @@ def _resolve_take_paths(
     take_name: Optional[str],
     has_take_token: bool,
 ) -> tuple[str, str]:
-    """Resolve output_path and multi_pass_path, substituting $take if present."""
+    """Resolve output_path and multi_pass_path, substituting $take if present.
+
+    Returns literal empty strings ('') instead of {{Param}} references for
+    empty paths, because unquoted {{Param}} substituted with "" produces
+    bare YAML ``key:`` which parses as None instead of "".
+    """
     if has_take_token and take_name is not None:
         take_name_for_path = _STRIPPED_PATH_CHARS.sub("_", take_name)
         return (
             settings.output_path.replace(_TAKE_TOKEN, take_name_for_path),
             settings.multi_pass_path.replace(_TAKE_TOKEN, take_name_for_path),
         )
-    return "{{Param.OutputPath}}", "{{Param.MultiPassPath}}"
+    return (
+        "{{Param.OutputPath}}" if settings.output_path else "",
+        "{{Param.MultiPassPath}}" if settings.multi_pass_path else "",
+    )
 
 
 def get_takes_from_doc(doc: Any) -> dict[str, list[TakeData]]:
@@ -616,7 +641,6 @@ def create_job_bundle(
             step["hostRequirements"] = host_requirements
 
     save_job_bundle_files(job_bundle_path, job_template, parameter_values, asset_references)
-
     # Save Sticky Settings
     if settings.export_job_bundle_to_temp:
         # Close temporary document
@@ -904,7 +928,7 @@ def export_to_temp_folder(temp_dir: str, asset_references: AssetReferences) -> N
     asset_references.input_filenames = temp_assets
 
 
-def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowFlags()):
+def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowType(0)):  # type: ignore[call-overload]
     """
     Creates and returns a submission dialog for rendering jobs.
 
