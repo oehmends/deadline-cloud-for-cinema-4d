@@ -823,7 +823,7 @@ def get_conda_packages(doc: Any) -> str:
     """
     c4d_major_version = str(c4d.GetC4DVersion())[:4]
     adaptor_version = ".".join(str(v) for v in adaptor_version_tuple[:2])
-    packages = f"cinema4d={c4d_major_version}.* cinema4d-openjd={adaptor_version}.* cinema4d-corona={c4d_major_version}.*"
+    packages = f"cinema4d={c4d_major_version}.* cinema4d-openjd={adaptor_version}.* cinema4d-corona={c4d_major_version}"
 
     render_data = doc.GetActiveRenderData()
     if render_data[c4d.RDATA_RENDERENGINE] == 1029988:  # Arnold
