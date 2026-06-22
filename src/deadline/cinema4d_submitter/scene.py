@@ -25,7 +25,7 @@ except ImportError:
         def clear_warnings(self):
             return None
 
-    warning_collector = _NullWarningCollector()
+    warning_collector = _NullWarningCollector()  # type: ignore[assignment]
 
 """
 Functionality used for querying scene settings

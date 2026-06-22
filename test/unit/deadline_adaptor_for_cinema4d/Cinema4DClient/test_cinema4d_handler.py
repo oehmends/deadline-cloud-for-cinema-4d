@@ -869,13 +869,23 @@ class TestPathmapBaseObject:
         return mock_c4d
 
     def _run_pathmap_test(
-        self, mock_owner, mock_c4d, mapped_path="/new/path/texture.jpg", expect_unmapped_pyro=False
+        self,
+        mock_owner,
+        mock_c4d,
+        mapped_path="/new/path/texture.jpg",
+        expect_unmapped_pyro=False,
+        param_id=-1,
     ):
-        """Helper to run the pathmap test with given mocks"""
+        """Helper to run the pathmap test with given mocks.
+
+        ``param_id`` defaults to -1 so the Corona-proxy remapping branch stays
+        dormant and these tests continue to exercise the Redshift light texture
+        and Opyro/Pyro behaviour.
+        """
         handler = Cinema4DHandler(mock_map_path)
 
         with patch("deadline.cinema4d_adaptor.Cinema4DClient.cinema4d_handler.c4d", mock_c4d):
-            result = handler._pathmap_base_object(mock_owner, mapped_path)
+            result = handler._pathmap_base_object(mock_owner, param_id, mapped_path)
 
         assert handler.has_unmapped_pyro == expect_unmapped_pyro
         return result
