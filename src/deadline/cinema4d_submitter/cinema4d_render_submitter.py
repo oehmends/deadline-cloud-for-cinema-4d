@@ -105,7 +105,12 @@ def show_submitter():
             prefix="scene_with_assets_", dir=scene_dir_path
         ) as temp_dir:
             app.setStyleSheet(C4D_STYLE)  # type: ignore[attr-defined]
-            w = _show_submitter(temp_dir, None)
+            if is_windows():
+                w = _show_submitter(
+                    temp_dir, None, Qt.WindowType.Tool | Qt.WindowType.WindowStaysOnTopHint
+                )
+            else:
+                w = _show_submitter(temp_dir, None)
             w.setStyleSheet(C4D_STYLE)
             w.exec_()
     except Exception:
@@ -928,7 +933,7 @@ def export_to_temp_folder(temp_dir: str, asset_references: AssetReferences) -> N
     asset_references.input_filenames = temp_assets
 
 
-def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowType(0)):  # type: ignore[call-overload]
+def _show_submitter(temp_dir: str, parent=None, f=Qt.WindowType.Tool):  # type: ignore[call-overload]
     """
     Creates and returns a submission dialog for rendering jobs.
 
