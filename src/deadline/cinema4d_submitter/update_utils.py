@@ -2,11 +2,22 @@
 
 """Utilities for checking and displaying update notifications."""
 
+from __future__ import annotations
+
 import logging
 from dataclasses import dataclass
 
-from deadline.client.api import safe_check_for_updates, UpdateCheckResult, UpdateCheckStatus
-from deadline.client.ui.dialogs.update_available_dialog import UpdateAvailableDialog
+try:
+    from deadline.client.api import safe_check_for_updates, UpdateCheckResult, UpdateCheckStatus
+    from deadline.client.ui.dialogs.update_available_dialog import UpdateAvailableDialog
+
+    _UPDATE_CHECK_AVAILABLE = True
+except ImportError:
+    # Older bundled deadline-cloud libraries (e.g. an install updated via a
+    # partial file sync rather than the full installer) don't ship the
+    # update-check API. Degrade gracefully so importing the submitter doesn't
+    # crash; the update-notification feature is simply disabled.
+    _UPDATE_CHECK_AVAILABLE = False
 
 from ._version import version_tuple as adaptor_version_tuple
 from .style import C4D_STYLE
@@ -48,6 +59,10 @@ def check_and_show_update_dialog() -> bool:
         True if the user clicked Download (caller should skip opening the submitter),
         False otherwise.
     """
+    if not _UPDATE_CHECK_AVAILABLE:
+        # Installed deadline-cloud library is too old to support update checks.
+        return False
+
     if _session_state.update_dismissed:
         return False
 
