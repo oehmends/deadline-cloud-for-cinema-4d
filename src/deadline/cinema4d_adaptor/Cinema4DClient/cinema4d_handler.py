@@ -174,7 +174,7 @@ class Cinema4DHandler:
 
         if isinstance(owner, c4d.BaseObject):
             # Redshift light textures
-            return self._pathmap_base_object(owner, mapped_path)
+            return self._pathmap_base_object(owner, param_id, mapped_path)
 
         if isinstance(owner, c4d.documents.BaseVideoPost):
             # PostFX, e.g. LUT files or background files
@@ -193,8 +193,8 @@ class Cinema4DHandler:
             return True
         return False
 
-    def _pathmap_base_object(self, owner, mapped_path) -> bool:
-        # c4d.BaseObject e.g. Redshift light texture
+    def _pathmap_base_object(self, owner, param_id, mapped_path) -> bool:
+        # c4d.BaseObject e.g. Redshift light texture or Corona proxy
         mapped = False
         for item in [
             c4d.REDSHIFT_LIGHT_PHYSICAL_TEXTURE,
@@ -214,6 +214,17 @@ class Cinema4DHandler:
                 owner[desc_id] = mapped_path
                 mapped = True
 
+        # Corona Proxy (Chaos Cosmos) uses a regular BaseObject with a file path parameter.
+        # The asset list gives us the param_id for the path (e.g. 17001); if it points to a string,
+        # remap it directly so we don't fall back to the generic warning path.
+        if not mapped and param_id not in (None, -1):
+            try:
+                existing_path = owner[param_id]
+            except Exception:
+                existing_path = None
+            if isinstance(existing_path, str) and existing_path:
+                owner[param_id] = mapped_path
+                mapped = True
         if hasattr(c4d, "Opyro") and owner.GetType() == c4d.Opyro:
             # Opyro (i.e. Pyro output starting in C4D 2026) actually breaks if you try
             # to pathmap it, so we will simply return True to indicate that all applicable

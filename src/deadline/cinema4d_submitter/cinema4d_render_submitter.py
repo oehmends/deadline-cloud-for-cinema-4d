@@ -30,6 +30,15 @@ from .assets import AssetIntrospector
 from .data_classes import (
     RenderSubmitterUISettings,
 )
+
+try:
+    from .enums import TextCaching
+except ImportError:
+    # Fallback for environments missing enums.py
+    class TextCaching:  # type: ignore[misc,no-redef]
+        DEACTIVATE = type("EnumVal", (), {"value": "0"})()
+
+
 from .detailed_logging_utils import get_detailed_logging_environment
 from .font_utils import scene_has_fonts, get_font_manager_environment, FONTS_DIR
 from .warning_collector import warning_collector
@@ -828,7 +837,7 @@ def get_conda_packages(doc: Any) -> str:
     """
     c4d_major_version = str(c4d.GetC4DVersion())[:4]
     adaptor_version = ".".join(str(v) for v in adaptor_version_tuple[:2])
-    packages = f"cinema4d={c4d_major_version}.* cinema4d-openjd={adaptor_version}.*"
+    packages = f"cinema4d={c4d_major_version}.* cinema4d-openjd={adaptor_version}.* cinema4d-corona={c4d_major_version}"
 
     render_data = doc.GetActiveRenderData()
     if render_data[c4d.RDATA_RENDERENGINE] == 1029988:  # Arnold
