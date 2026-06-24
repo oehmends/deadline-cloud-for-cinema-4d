@@ -65,6 +65,60 @@ class TestCinema4DHandler:
         with pytest.raises(RuntimeError, match="Failed to load the scene file"):
             handler.set_scene_file({"scene_file": "file.c4d"})
 
+    @patch(
+        "deadline.cinema4d_adaptor.Cinema4DClient.cinema4d_handler.c4d.documents.GetActiveDocument"
+    )
+    def test_set_take_not_found_raises_error(self, mock_get_doc: Mock):
+        """Verify that set_take raises RuntimeError when the take name doesn't exist."""
+        handler = Cinema4DHandler(mock_map_path)
+
+        # Set up mock takes: "Main" and "A"
+        mock_main_take = Mock()
+        mock_main_take.GetName.return_value = "Main"
+        mock_main_take.GetChildren.return_value = []
+
+        mock_take_a = Mock()
+        mock_take_a.GetName.return_value = "A"
+        mock_take_a.GetChildren.return_value = []
+
+        mock_take_data = Mock()
+        mock_take_data.GetCurrentTake.return_value = mock_main_take
+        mock_main_take.GetChildren.return_value = [mock_take_a]
+
+        mock_doc = Mock()
+        mock_doc.GetTakeData.return_value = mock_take_data
+        mock_get_doc.return_value = mock_doc
+
+        with pytest.raises(RuntimeError, match="Take not found: NonExistentTake"):
+            handler.set_take({"take": "NonExistentTake"})
+
+    @patch(
+        "deadline.cinema4d_adaptor.Cinema4DClient.cinema4d_handler.c4d.documents.GetActiveDocument"
+    )
+    def test_set_take_found_sets_take(self, mock_get_doc: Mock):
+        """Verify that set_take correctly sets the take when it exists."""
+        handler = Cinema4DHandler(mock_map_path)
+
+        # Set up mock takes: "Main" and "A"
+        mock_main_take = Mock()
+        mock_main_take.GetName.return_value = "Main"
+        mock_main_take.GetChildren.return_value = []
+
+        mock_take_a = Mock()
+        mock_take_a.GetName.return_value = "A"
+        mock_take_a.GetChildren.return_value = []
+
+        mock_take_data = Mock()
+        mock_take_data.GetCurrentTake.return_value = mock_main_take
+        mock_main_take.GetChildren.return_value = [mock_take_a]
+
+        mock_doc = Mock()
+        mock_doc.GetTakeData.return_value = mock_take_data
+        mock_get_doc.return_value = mock_doc
+
+        handler.set_take({"take": "A"})
+        mock_take_data.SetCurrentTake.assert_called_once_with(mock_take_a)
+
 
 class TestShouldCacheText:
     """Tests for the use_cached_text method"""
@@ -799,9 +853,15 @@ class TestStartRenderChunkRange:
 
         mock_doc = Mock()
         mock_render_data = MagicMock()
+
+        def mock_getitem(self, key):
+            if key == c4d.RDATA_FRAMERATE:
+                return 24
+            return MagicMock()
+
+        mock_render_data.__getitem__ = mock_getitem
         mock_render_data.GetDataInstance = Mock()
         mock_doc.GetActiveRenderData.return_value = mock_render_data
-        mock_doc.GetFps.return_value = 24
         handler.doc = mock_doc
 
         mock_render_document.return_value = c4d.RENDERRESULT_OK
@@ -810,7 +870,7 @@ class TestStartRenderChunkRange:
             handler.start_render({"frame": "10-20"})
 
         # FRAMEFROM should be called with start frame, FRAMETO with end frame
-        # BaseTime is called as BaseTime(frame, fps)
+        # BaseTime is called as BaseTime(frame, fps) using RDATA_FRAMERATE (24)
         start_frame, end_frame, fps = 10, 20, 24
         calls = mock_base_time.call_args_list
         assert (start_frame, fps) in [c.args for c in calls]

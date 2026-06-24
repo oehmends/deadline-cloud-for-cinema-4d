@@ -290,7 +290,7 @@ class Cinema4DHandler:
         start_frame, end_frame = self._parse_frame_range(frame_value)
         self.render_kwargs[FRAME_KEY] = start_frame
 
-        fps = self.doc.GetFps()
+        fps = self.render_data[c4d.RDATA_FRAMERATE]
         self.render_data[c4d.RDATA_FRAMEFROM] = c4d.BaseTime(start_frame, fps)
         self.render_data[c4d.RDATA_FRAMETO] = c4d.BaseTime(end_frame, fps)
         self.render_data[c4d.RDATA_FRAMESTEP] = 1
@@ -389,13 +389,16 @@ class Cinema4DHandler:
         main_take = take_data.GetCurrentTake()
         all_takes = [main_take] + get_child_takes(main_take)
 
-        take = None
+        matched_take = None
         for take in all_takes:
             if take.GetName() == take_name:
+                matched_take = take
                 break
-        if take is None:
-            print("Error: take not found: %s" % take_name)
-        take_data.SetCurrentTake(take)
+
+        if matched_take is None:
+            raise RuntimeError("Take not found: %s" % take_name)
+
+        take_data.SetCurrentTake(matched_take)
 
     def use_cached_text(self, data: dict) -> None:
         """
